@@ -1226,6 +1226,10 @@ invalid_input:
 	return rgb_meta_scanlines;
 }
 
+#ifndef MSM_MEDIA_MAX
+#define MSM_MEDIA_MAX(__a, __b) ((__a) > (__b) ? (__a) : (__b))
+#endif
+
 /*
  * Function arguments:
  * @color_fmt
@@ -1239,6 +1243,7 @@ invalid_input:
 static inline unsigned int VENUS_BUFFER_SIZE(unsigned int color_fmt,
 	unsigned int width, unsigned int height)
 {
+	unsigned int extra_size = 16384; // 16 * 1024
 	unsigned int size = 0, uv_alignment = 0;
 	unsigned int y_plane, uv_plane, y_stride,
 		uv_stride, y_sclines, uv_sclines;
@@ -1269,9 +1274,15 @@ static inline unsigned int VENUS_BUFFER_SIZE(unsigned int color_fmt,
 		uv_alignment = 4096;
 		y_plane = y_stride * y_sclines;
 		uv_plane = uv_stride * uv_sclines + uv_alignment;
+#if 0
 		size = y_plane + uv_plane;
+#else
+		size = y_plane + uv_plane +
+				MSM_MEDIA_MAX(extra_size, 8 * y_stride);
+#endif
 		break;
 	case COLOR_FMT_NV12_UBWC:
+#if 0
 		y_meta_stride = VENUS_Y_META_STRIDE(color_fmt, width);
 		uv_meta_stride = VENUS_UV_META_STRIDE(color_fmt, width);
 		if (width <= INTERLACE_WIDTH_MAX &&
@@ -1313,6 +1324,22 @@ static inline unsigned int VENUS_BUFFER_SIZE(unsigned int color_fmt,
 			size = (y_ubwc_plane + uv_ubwc_plane + y_meta_plane +
 				uv_meta_plane)+(64 * y_stride);
 		}
+#else
+		y_ubwc_plane = MSM_MEDIA_ALIGN(y_stride * y_sclines, 4096);
+		uv_ubwc_plane = MSM_MEDIA_ALIGN(uv_stride * uv_sclines, 4096);
+		y_meta_stride = VENUS_Y_META_STRIDE(color_fmt, width);
+		uv_meta_stride = VENUS_UV_META_STRIDE(color_fmt, width);
+		y_meta_scanlines = VENUS_Y_META_SCANLINES(color_fmt, height);
+		y_meta_plane = MSM_MEDIA_ALIGN(
+				y_meta_stride * y_meta_scanlines, 4096);
+		uv_meta_stride = VENUS_UV_META_STRIDE(color_fmt, width);
+		uv_meta_scanlines = VENUS_UV_META_SCANLINES(color_fmt, height);
+		uv_meta_plane = MSM_MEDIA_ALIGN(uv_meta_stride *
+					uv_meta_scanlines, 4096);
+
+		size = y_ubwc_plane + uv_ubwc_plane + y_meta_plane +
+			uv_meta_plane + MSM_MEDIA_MAX(extra_size, 64 * y_stride);
+#endif
 		size += UBWC_EXTRA_SIZE;
 		break;
 	case COLOR_FMT_NV12_BPP10_UBWC:
