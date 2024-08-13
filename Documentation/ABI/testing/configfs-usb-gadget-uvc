@@ -4,13 +4,20 @@ KernelVersion:	4.0
 Description:	UVC function directory
 
 		streaming_maxburst	- 0..15 (ss only)
-		streaming_maxpacket	- 1..1023 (fs), 1..3072 (hs/ss)
-		streaming_interval	- 1..16
+		streaming_maxpacket	- isoc: 1..1023 (fs), 1..3072 (hs/ss)
+					  bulk: 8/16/32/64 (fs), 512 (hs), 1024 (ss)
+		streaming_interval	- 1..16 (isoc only)
+		streaming_transfer	- isoc/bulk
+		streaming_maxpayload 	- 1024..65536 (bulk only)
 
 What:		/config/usb-gadget/gadget/functions/uvc.name/control
 Date:		Dec 2014
 KernelVersion:	4.0
 Description:	Control descriptors
+
+		All attributes read only:
+		bInterfaceNumber	- USB interface number for this
+					  streaming interface
 
 What:		/config/usb-gadget/gadget/functions/uvc.name/control/class
 Date:		Dec 2014
@@ -42,7 +49,7 @@ Date:		Dec 2014
 KernelVersion:	4.0
 Description:	Default output terminal descriptors
 
-		All attributes read only:
+		All attributes read only except bSourceID:
 		iTerminal	- index of string descriptor
 		bSourceID 	- id of the terminal to which this terminal
 				is connected
@@ -92,6 +99,35 @@ Description:	Default processing unit descriptors
 				connected
 		bUnitID		- a non-zero id of this unit
 
+What:          /config/usb-gadget/gadget/functions/uvc.name/control/extensions
+Date:          Nov 2022
+KernelVersion: 6.1
+Description:   Extension unit descriptors
+
+What:          /config/usb-gadget/gadget/functions/uvc.name/control/extensions/name
+Date:          Nov 2022
+KernelVersion: 6.1
+Description:   Extension Unit (XU) Descriptor
+
+               bLength, bUnitID and iExtension are read-only. All others are
+               read-write.
+
+               ===============         ========================================
+               bLength                 size of the descriptor in bytes
+               bUnitID                 non-zero ID of this unit
+               guidExtensionCode       Vendor-specific code identifying the XU
+               bNumControls            number of controls in this XU
+               bNrInPins               number of input pins for this unit
+               baSourceID              list of the IDs of the units or terminals
+                                       to which this XU is connected
+               bControlSize            size of the bmControls field in bytes
+               bmControls              list of bitmaps detailing which vendor
+                                       specific controls are supported
+               iExtension              index of a string descriptor that describes
+                                       this extension unit
+               ===============         ========================================
+
+
 What:		/config/usb-gadget/gadget/functions/uvc.name/control/header
 Date:		Dec 2014
 KernelVersion:	4.0
@@ -108,6 +144,10 @@ What:		/config/usb-gadget/gadget/functions/uvc.name/streaming
 Date:		Dec 2014
 KernelVersion:	4.0
 Description:	Streaming descriptors
+
+		All attributes read only:
+		bInterfaceNumber	- USB interface number for this
+					  streaming interface
 
 What:		/config/usb-gadget/gadget/functions/uvc.name/streaming/class
 Date:		Dec 2014
@@ -160,6 +200,10 @@ Description:	Specific MJPEG format descriptors
 
 		All attributes read only,
 		except bmaControls and bDefaultFrameIndex:
+		bFormatIndex		- unique id for this format descriptor;
+					only defined after parent header is
+					linked into the streaming class;
+					read-only
 		bmaControls		- this format's data for bmaControls in
 					the streaming header
 		bmInterfaceFlags	- specifies interlace information,
@@ -177,6 +221,10 @@ Date:		Dec 2014
 KernelVersion:	4.0
 Description:	Specific MJPEG frame descriptors
 
+		bFrameIndex		- unique id for this framedescriptor;
+					only defined after parent format is
+					linked into the streaming header;
+					read-only
 		dwFrameInterval		- indicates how frame interval can be
 					programmed; a number of values
 					separated by newline can be specified
@@ -204,6 +252,10 @@ Date:		Dec 2014
 KernelVersion:	4.0
 Description:	Specific uncompressed format descriptors
 
+		bFormatIndex		- unique id for this format descriptor;
+					only defined after parent header is
+					linked into the streaming class;
+					read-only
 		bmaControls		- this format's data for bmaControls in
 					the streaming header
 		bmInterfaceFlags	- specifies interlace information,
@@ -224,6 +276,10 @@ Date:		Dec 2014
 KernelVersion:	4.0
 Description:	Specific uncompressed frame descriptors
 
+		bFrameIndex		- unique id for this framedescriptor;
+					only defined after parent format is
+					linked into the streaming header;
+					read-only
 		dwFrameInterval		- indicates how frame interval can be
 					programmed; a number of values
 					separated by newline can be specified

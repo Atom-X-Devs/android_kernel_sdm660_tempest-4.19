@@ -122,6 +122,7 @@ static struct cnss_pci_reg ce_cmn[] = {
 	{ NULL },
 };
 
+#ifdef CONFIG_CNSS2_DEBUG
 static struct cnss_pci_reg qdss_csr[] = {
 	{ "QDSSCSR_ETRIRQCTRL", QDSS_APB_DEC_CSR_ETRIRQCTRL_OFFSET },
 	{ "QDSSCSR_PRESERVEETF", QDSS_APB_DEC_CSR_PRESERVEETF_OFFSET },
@@ -129,6 +130,7 @@ static struct cnss_pci_reg qdss_csr[] = {
 	{ "QDSSCSR_PRESERVEETR1", QDSS_APB_DEC_CSR_PRESERVEETR1_OFFSET },
 	{ NULL },
 };
+#endif
 
 static struct cnss_pci_reg pci_scratch[] = {
 	{ "PCIE_SCRATCH_0", PCIE_SCRATCH_0_SOC_PCIE_REG },
@@ -973,7 +975,8 @@ static void cnss_pci_handle_linkdown(struct cnss_pci_data *pci_priv)
 	reinit_completion(&pci_priv->wake_event);
 
 	/* Notify MHI about link down */
-	mhi_control_error(pci_priv->mhi_ctrl);
+	if (pci_priv->mhi_ctrl)
+		mhi_control_error(pci_priv->mhi_ctrl);
 
 	if (pci_dev->device == QCA6174_DEVICE_ID)
 		disable_irq(pci_dev->irq);
@@ -1744,6 +1747,7 @@ int cnss_pci_update_status(struct cnss_pci_data *pci_priv,
 	return 0;
 }
 
+#ifdef CONFIG_CNSS2_DEBUG
 static void cnss_pci_misc_reg_dump(struct cnss_pci_data *pci_priv,
 				   struct cnss_misc_reg *misc_reg,
 				   u32 misc_reg_size,
@@ -1813,7 +1817,13 @@ static void cnss_pci_dump_misc_reg(struct cnss_pci_data *pci_priv)
 	cnss_pci_misc_reg_dump(pci_priv, pci_priv->wlaon_reg,
 			       pci_priv->wlaon_reg_size, "wlaon");
 }
+#else
+static void cnss_pci_dump_misc_reg(struct cnss_pci_data *pci_priv)
+{
+}
+#endif
 
+#ifdef CONFIG_CNSS2_DEBUG
 static void cnss_pci_dump_mhi_reg(struct cnss_pci_data *pci_priv)
 {
 	if (in_interrupt() || irqs_disabled())
@@ -1825,7 +1835,13 @@ static void cnss_pci_dump_mhi_reg(struct cnss_pci_data *pci_priv)
 	mhi_debug_reg_dump(pci_priv->mhi_ctrl);
 	cnss_pci_soc_scratch_reg_dump(pci_priv);
 }
+#else
+static void cnss_pci_dump_mhi_reg(struct cnss_pci_data *pci_priv)
+{
+}
+#endif
 
+#ifdef CONFIG_CNSS2_DEBUG
 static void cnss_pci_dump_shadow_reg(struct cnss_pci_data *pci_priv)
 {
 	int i, j = 0, array_size = SHADOW_REG_COUNT + SHADOW_REG_INTER_COUNT;
@@ -1871,6 +1887,11 @@ force_wake_put:
 	if (do_force_wake_put)
 		cnss_pci_force_wake_put(pci_priv);
 }
+#else
+static void cnss_pci_dump_shadow_reg(struct cnss_pci_data *pci_priv)
+{
+}
+#endif
 
 #ifdef CONFIG_CNSS2_DEBUG
 static void cnss_pci_collect_dump(struct cnss_pci_data *pci_priv)
@@ -2264,9 +2285,10 @@ static int cnss_qca6290_ramdump(struct cnss_pci_data *pci_priv)
 	struct cnss_plat_data *plat_priv = pci_priv->plat_priv;
 	struct cnss_ramdump_info_v2 *info_v2 = &plat_priv->ramdump_info_v2;
 	struct cnss_dump_data *dump_data = &info_v2->dump_data;
+	struct cnss_dump_seg *dump_seg = info_v2->dump_data_vaddr;
 	int ret = 0;
 
-	if (!info_v2->dump_data_valid ||
+	if (!info_v2->dump_data_valid || !dump_seg ||
 	    dump_data->nentries == 0)
 		return 0;
 
@@ -4146,6 +4168,7 @@ static void cnss_pci_disable_bus(struct cnss_pci_data *pci_priv)
 		pci_disable_device(pci_dev);
 }
 
+#ifdef CONFIG_CNSS2_DEBUG
 static void cnss_pci_dump_qdss_reg(struct cnss_pci_data *pci_priv)
 {
 	struct cnss_plat_data *plat_priv = pci_priv->plat_priv;
@@ -4173,6 +4196,11 @@ static void cnss_pci_dump_qdss_reg(struct cnss_pci_data *pci_priv)
 			    plat_priv->qdss_reg[i]);
 	}
 }
+#else
+static void cnss_pci_dump_qdss_reg(struct cnss_pci_data *pci_priv)
+{
+}
+#endif
 
 static void cnss_pci_dump_ce_reg(struct cnss_pci_data *pci_priv,
 				 enum cnss_ce_index ce)
@@ -4442,6 +4470,11 @@ void cnss_pci_collect_dump_info(struct cnss_pci_data *pci_priv, bool in_panic)
 	rddm_image = pci_priv->mhi_ctrl->rddm_image;
 	dump_data->nentries = 0;
 
+	if (!dump_seg) {
+		cnss_pr_warn("FW image dump collection not setup");
+		goto skip_dump;
+	}
+
 	cnss_pr_dbg("Collect FW image dump segment, nentries %d\n",
 		    fw_image->entries);
 
@@ -4487,6 +4520,7 @@ void cnss_pci_collect_dump_info(struct cnss_pci_data *pci_priv, bool in_panic)
 	if (dump_data->nentries > 0)
 		plat_priv->ramdump_info_v2.dump_data_valid = true;
 
+skip_dump:
 	cnss_pci_set_mhi_state(pci_priv, CNSS_MHI_RDDM_DONE);
 	complete(&plat_priv->rddm_complete);
 }
@@ -4499,6 +4533,9 @@ void cnss_pci_clear_dump_info(struct cnss_pci_data *pci_priv)
 	struct image_info *fw_image, *rddm_image;
 	struct cnss_fw_mem *fw_mem = plat_priv->fw_mem;
 	int i, j;
+
+	if (!dump_seg)
+		return;
 
 	fw_image = pci_priv->mhi_ctrl->fbc_image;
 	rddm_image = pci_priv->mhi_ctrl->rddm_image;

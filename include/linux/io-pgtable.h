@@ -162,7 +162,19 @@ struct io_pgtable_cfg {
  * @iova_to_phys:	Translate iova to physical address.
  * @is_iova_coherent:	Checks coherency of given IOVA. Returns True if coherent
  *			and False if non-coherent.
+ * @fetch_iova_ptep:	Translates an iova to a PTE pointer from the final page
+ *			table level, splitting block entries if necessary.
+ *                      Optionally returns a pointer to the parent PTE.
+ * @decode_ptep:	Extracts the page pointer and mapping attributes from a
+ *			PTE pointer.
+ * @remap_ptep:		Remaps the entry pointed to by a PTE pointer with the
+ *			provided page and protection flags.
  * @iova_to_pte:	Translate iova to Page Table Entry (PTE).
+ * @find_mapped_page_range:	Translate a range of IOVAs to their backing
+ *				pages. The pages parameter should be
+ *				preallocated with page_count entries.
+ * @set_page_range_access_flag:	Sets whether or not the PTEs in the given IOVA
+ *				range are marked as having been accessed.
  *
  * These functions map directly onto the iommu_ops member functions with
  * the same names.
@@ -179,9 +191,20 @@ struct io_pgtable_ops {
 				    unsigned long iova);
 	bool (*is_iova_coherent)(struct io_pgtable_ops *ops,
 				unsigned long iova);
+	void *(*fetch_iova_ptep)(struct io_pgtable_ops *ops, dma_addr_t iova,
+			void **pptepp);
+	int (*decode_ptep)(struct io_pgtable_ops *ops, void *ptep,
+			struct page **pagep, int *protp);
+	int (*remap_ptep)(struct io_pgtable_ops *ops, void *ptep, void *pptep,
+			dma_addr_t iova, struct page *page, int prot);
 	uint64_t (*iova_to_pte)(struct io_pgtable_ops *ops,
 		    unsigned long iova);
-
+	int (*find_mapped_page_range)(struct io_pgtable_ops *ops,
+			dma_addr_t iova, struct page **pages, int page_count);
+	int (*get_backing_pages)(struct io_pgtable_ops *ops, dma_addr_t iova,
+			struct list_head *page_list, int page_count);
+	int (*set_page_range_access_flag)(struct io_pgtable_ops *ops,
+		dma_addr_t addr, int page_count, bool access_flag);
 };
 
 /**

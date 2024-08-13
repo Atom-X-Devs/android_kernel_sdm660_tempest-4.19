@@ -69,6 +69,13 @@
 /* write N 32-bit words to memory */
 #define CP_MEM_WRITE		0x3d
 
+/* copy (d)words from one memory location to another */
+#define CP_MEM_TO_MEM		0x73
+/* copy dwords */
+#define CP_MEM_TO_MEM_64BIT_FLAG	(1 << 29)
+/* wait for memory writes first */
+#define CP_MEM_TO_MEM_WAIT_FLAG		(1 << 30)
+
 /* conditional execution of a sequence of packets */
 #define CP_COND_EXEC		0x44
 
@@ -365,30 +372,6 @@ static inline uint cp_wait_for_idle(struct adreno_device *adreno_dev,
 		*cmds++ = 0;
 	} else
 		*cmds++ = cp_type7_packet(CP_WAIT_FOR_IDLE, 0);
-
-	return cmds - start;
-}
-
-/**
- * cp_invalidate_state - common function for invalidating cp
- * state
- * @adreno_dev: The adreno device
- * @cmds: command pointer to add gpuaddr
- */
-static inline uint cp_invalidate_state(struct adreno_device *adreno_dev,
-				uint *cmds)
-{
-	uint *start = cmds;
-
-	if (ADRENO_GPUREV(adreno_dev) < 500) {
-		*cmds++ = cp_type3_packet(CP_INVALIDATE_STATE, 1);
-		*cmds++ = 0x7fff;
-	} else {
-		*cmds++ = cp_type7_packet(CP_SET_DRAW_STATE, 3);
-		*cmds++ = 0x40000;
-		*cmds++ = 0;
-		*cmds++ = 0;
-	}
 
 	return cmds - start;
 }

@@ -27,34 +27,60 @@ static u32 kgsl_reclaim_max_page_limit = 7680;
 static int kgsl_memdesc_get_reclaimed_pages(struct kgsl_mem_entry *entry)
 {
 	struct kgsl_memdesc *memdesc = &entry->memdesc;
+	struct sg_table *sgt = NULL;
+	struct page **pages;
+	unsigned int page_count = memdesc->size >> PAGE_SHIFT;
 	int i, ret;
-	struct page *page;
 
-	for (i = 0; i < memdesc->page_count; i++) {
-		if (memdesc->pages[i])
-			continue;
+	pages = kcalloc(page_count, sizeof(struct page *), GFP_KERNEL);
+	if (pages == NULL)
+		-ENOMEM;
+
+	for (i = 0; i < page_count; i++) {
+		struct page *page;
 
 		page = shmem_read_mapping_page_gfp(
 			memdesc->shmem_filp->f_mapping, i, kgsl_gfp_mask(0));
 
-		if (IS_ERR(page))
+		if (IS_ERR(page)) {
+			kfree(pages);
 			return PTR_ERR(page);
+		}
 
 		kgsl_flush_page(page);
 
 		/*
-		 * Update the pages array only if vmfault has not
-		 * updated it meanwhile
+		 * Get a reference to the page only if vmfault has not
+		 * updated it meanwhile.
 		 */
-		spin_lock(&memdesc->lock);
-		if (!memdesc->pages[i]) {
-			memdesc->pages[i] = page;
+		if (!TestSetPagePrivate2(page)) {
 			memdesc->reclaimed_page_count--;
 			atomic_dec(&entry->priv->reclaimed_page_count);
 		} else
 			put_page(page);
-		spin_unlock(&memdesc->lock);
+
+		pages[i] = page;
 	}
+
+	/* Flush the LRU pagevecs to ensure the pages are assigned. */
+	lru_add_drain_all();
+
+	/* Isolate the pages (if necessary). */
+	for (i = 0; i < page_count; i++)
+		WARN_ON(PageLRU(pages[i]) && isolate_lru_page(pages[i]));
+
+	sgt = kgsl_alloc_sgt_from_pages(pages, page_count);
+	if (IS_ERR_OR_NULL(sgt)) {
+		kfree(pages);
+		return PTR_ERR(sgt);
+	}
+
+	/* Swap out the SG table before mapping the entry. */
+	kgsl_free_sgt(memdesc->sgt);
+	memdesc->sgt = sgt;
+
+	/* Now that we've moved to a sg table don't need the pages anymore. */
+	kfree(pages);
 
 	ret = kgsl_mmu_map(memdesc->pagetable, memdesc);
 	if (ret)
@@ -88,7 +114,7 @@ int kgsl_reclaim_to_pinned_state(
 			break;
 		}
 
-		if (!entry->pending_free &&
+		if (!atomic_read(&entry->pending_free) &&
 				(entry->memdesc.priv & KGSL_MEMDESC_RECLAIMED))
 			valid_entry = kgsl_mem_entry_get(entry);
 		spin_unlock(&process->mem_lock);
@@ -195,19 +221,15 @@ ssize_t kgsl_proc_max_reclaim_limit_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", kgsl_reclaim_max_page_limit);
 }
 
-static void kgsl_release_page_vec(struct pagevec *pvec)
-{
-	check_move_unevictable_pages(pvec->pages, pvec->nr);
-	__pagevec_release(pvec);
-}
-
 static int kgsl_reclaim_callback(struct notifier_block *nb,
 		unsigned long pid, void *data)
 {
 	struct kgsl_process_private *p, *process = NULL;
 	struct kgsl_mem_entry *entry;
 	struct kgsl_memdesc *memdesc;
+	struct page *page, *tmp;
 	int valid_entry, next = 0, ret = NOTIFY_OK;
+	LIST_HEAD(page_list);
 
 	spin_lock(&kgsl_driver.proclist_lock);
 	list_for_each_entry(p, &kgsl_driver.process_list, list) {
@@ -253,7 +275,7 @@ static int kgsl_reclaim_callback(struct notifier_block *nb,
 		}
 
 		memdesc = &entry->memdesc;
-		if (!entry->pending_free &&
+		if (!atomic_read(&entry->pending_free) &&
 				(memdesc->priv & KGSL_MEMDESC_CAN_RECLAIM) &&
 				!(memdesc->priv & KGSL_MEMDESC_RECLAIMED) &&
 				!(memdesc->priv & KGSL_MEMDESC_SKIP_RECLAIM))
@@ -266,51 +288,54 @@ static int kgsl_reclaim_callback(struct notifier_block *nb,
 		}
 
 		if ((atomic_read(&process->reclaimed_page_count) +
-			memdesc->page_count) > kgsl_reclaim_max_page_limit) {
+				(memdesc->size >> PAGE_SHIFT)) >
+				kgsl_reclaim_max_page_limit) {
 			kgsl_mem_entry_put(entry);
 			next++;
 			continue;
 		}
 
-		if (!kgsl_mmu_unmap(memdesc->pagetable, memdesc)) {
-			int i;
-			struct pagevec pvec;
+		/* Look up the backing pages of the entry before unmapping. */
+		if (kgsl_mmu_get_backing_pages(memdesc, &page_list)) {
+			kgsl_mmu_release_page_list(memdesc, &page_list);
+			kgsl_mem_entry_put(entry);
+			next++;
+			continue;
+		}
+
+		if (!kgsl_mmu_unmap(memdesc->pagetable, memdesc, &page_list)) {
+			int page_count = 0;
+
+			list_for_each_entry_safe(page, tmp, &page_list, lru) {
+				list_del(&page->lru);
+
+				set_page_dirty_lock(page);
+				ClearPagePrivate2(page);
+				put_page(page);
+
+				/* Release the ref taken by isolate_lru_page. */
+				putback_lru_page(page);
+
+				page_count++;
+			}
 
 			/*
-			 * Pages that are first allocated are by default added
-			 * to unevictable list. To reclaim them, we first clear
-			 * the AS_UNEVICTABLE flag of the shmem file address
-			 * space thus check_move_unevictable_pages() places
-			 * them on the evictable list.
-			 *
-			 * Once reclaim is done, hint that further shmem
-			 * allocations will have to be on the unevictable list.
+			 * Flush the LRU pagevecs to ensure the pages are
+			 * assigned to the LRU.
 			 */
-			mapping_clear_unevictable(
-					memdesc->shmem_filp->f_mapping);
-			pagevec_init(&pvec);
-			for (i = 0; i < memdesc->page_count; i++) {
-				set_page_dirty_lock(memdesc->pages[i]);
-				spin_lock(&memdesc->lock);
-				pagevec_add(&pvec, memdesc->pages[i]);
-				memdesc->pages[i] = NULL;
-				spin_unlock(&memdesc->lock);
-				if (pagevec_count(&pvec) == PAGEVEC_SIZE)
-					kgsl_release_page_vec(&pvec);
-			}
-			if (pagevec_count(&pvec))
-				kgsl_release_page_vec(&pvec);
+			lru_add_drain_all();
 
 			memdesc->priv |= KGSL_MEMDESC_RECLAIMED;
 
 			ret = reclaim_address_space
 				(memdesc->shmem_filp->f_mapping, data);
 
-			mapping_set_unevictable(memdesc->shmem_filp->f_mapping);
-			memdesc->reclaimed_page_count += memdesc->page_count;
-			atomic_add(memdesc->page_count,
-					&process->reclaimed_page_count);
+			memdesc->reclaimed_page_count += page_count;
+			atomic_add(page_count, &process->reclaimed_page_count);
 		}
+
+		/* Clean up after ourselves regardless of MMU unmap success. */
+		kgsl_mmu_release_page_list(memdesc, &page_list);
 
 		kgsl_mem_entry_put(entry);
 

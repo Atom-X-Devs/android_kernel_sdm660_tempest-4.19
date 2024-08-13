@@ -979,9 +979,32 @@ static const struct adc_channels adc_chans_rev2[ADC_MAX_CHANNEL] = {
 					SCALE_HW_CALIB_DEFAULT)
 	[ADC_DIE_TEMP]		= ADC_CHAN_TEMP("die_temp", 1,
 					SCALE_HW_CALIB_PMIC_THERM)
+	[ADC_USB_IN_I]		= ADC_CHAN_VOLT("usb_in_i_uv", 1,
+					SCALE_HW_CALIB_DEFAULT)
+	[ADC_USB_IN_V_16]	= ADC_CHAN_VOLT("usb_in_v_div_16", 16,
+					SCALE_HW_CALIB_DEFAULT)
+	[ADC_CHG_TEMP]		= ADC_CHAN_TEMP("chg_temp", 1,
+					SCALE_HW_CALIB_PM5_CHG_TEMP)
+	/* Charger prescales SBUx and MID_CHG to fit within 1.8V upper unit */
+	[ADC_SBUx]		= ADC_CHAN_VOLT("chg_sbux", 3,
+					SCALE_HW_CALIB_DEFAULT)
+	[ADC_GPIO4]		= ADC_CHAN_VOLT("psns_vol", 1,
+					SCALE_HW_CALIB_DEFAULT)
+	[ADC_MID_CHG_DIV6]	= ADC_CHAN_VOLT("chg_mid_chg", 6,
+					SCALE_HW_CALIB_DEFAULT)
+	[ADC_BAT_THERM_PU1]	= ADC_CHAN_TEMP("bat_therm_pu1", 1,
+					SCALE_HW_CALIB_BATT_THERM_30K)
+	[ADC_BAT_THERM_PU2]	= ADC_CHAN_TEMP("bat_therm_pu2", 1,
+					SCALE_HW_CALIB_BATT_THERM_100K)
+	[ADC_BAT_THERM_PU3]	= ADC_CHAN_TEMP("bat_therm_pu3", 1,
+					SCALE_HW_CALIB_BATT_THERM_400K)
 	[ADC_AMUX_THM1_PU2]	= ADC_CHAN_TEMP("amux_thm1_pu2", 1,
 					SCALE_HW_CALIB_THERM_100K_PULLUP)
+	[ADC_AMUX_THM2_PU2]	= ADC_CHAN_TEMP("amux_thm2_pu2", 1,
+					SCALE_HW_CALIB_THERM_100K_PULLUP)
 	[ADC_AMUX_THM3_PU2]	= ADC_CHAN_TEMP("amux_thm3_pu2", 1,
+					SCALE_HW_CALIB_RBLT_100K_PULLUP)
+	[ADC_AMUX_THM4_PU2]     = ADC_CHAN_TEMP("amux_thm4_pu2", 1,
 					SCALE_HW_CALIB_THERM_100K_PULLUP)
 	[ADC_AMUX_THM5_PU2]	= ADC_CHAN_TEMP("amux_thm5_pu2", 1,
 					SCALE_HW_CALIB_THERM_100K_PULLUP)
@@ -989,6 +1012,14 @@ static const struct adc_channels adc_chans_rev2[ADC_MAX_CHANNEL] = {
 					SCALE_HW_CALIB_THERM_100K_PULLUP)
 	[ANA_IN]		= ADC_CHAN_TEMP("drax_temp", 1,
 					SCALE_HW_CALIB_PMIC_THERM)
+	[ADC_AMUX_THM1]		= ADC_CHAN_VOLT("amux_thm1", 1,
+					SCALE_HW_CALIB_DEFAULT)
+	[ADC_GPIO2_PU2]		= ADC_CHAN_TEMP("gpio2_pu2", 1,
+					SCALE_HW_CALIB_THERM_100K_PULLUP)
+	[ADC_GPIO3_PU2]		= ADC_CHAN_TEMP("gpio3_pu2", 1,
+					SCALE_HW_CALIB_THERM_100K_PULLUP)
+	[ADC_GPIO4_PU2]		= ADC_CHAN_TEMP("gpio4_pu2", 1,
+					SCALE_HW_CALIB_THERM_100K_PULLUP)
 };
 
 static int adc_get_dt_channel_data(struct adc_chip *adc,
@@ -1142,8 +1173,8 @@ const struct adc_data adc7_data_pmic = {
 };
 
 const struct adc_data data_pmic_rev2 = {
-	.full_scale_code_volt = 0x4000,
-	.full_scale_code_cur = 0x1800,
+	.full_scale_code_volt = 0x70e4,
+	.full_scale_code_cur = 0x10000,
 	.adc_chans = adc_chans_rev2,
 	.decimation = (unsigned int []) {256, 512, 1024},
 	.hw_settle = (unsigned int []) {0, 100, 200, 300, 400, 500, 600, 700,

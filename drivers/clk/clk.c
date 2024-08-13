@@ -3217,7 +3217,7 @@ int clk_set_flags(struct clk *clk, unsigned long flags)
 }
 EXPORT_SYMBOL_GPL(clk_set_flags);
 
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_COMMON_CLK_DEBUG
 #include <linux/debugfs.h>
 
 static struct dentry *rootdir;

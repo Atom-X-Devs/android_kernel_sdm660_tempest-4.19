@@ -712,6 +712,13 @@ config ARM64_64K_PAGES
 
 endchoice
 
+config ARM64_KERNEL_STACK_ORDER
+	int "Kernel stack size order"
+	range 0 3
+	default 2 if ARM64_4K_PAGES
+	default 0 if ARM64_16K_PAGES
+	default 0 if ARM64_64K_PAGES
+
 choice
 	prompt "Virtual address space size"
 	default ARM64_VA_BITS_39 if ARM64_4K_PAGES
@@ -1565,6 +1572,12 @@ config BUILD_ARM64_KERNEL_COMPRESSION_GZIP
 	  compression with concatenated dtb.
 	  gzip is based on the DEFLATE
 	  algorithm.
+
+config BUILD_ARM64_KERNEL_COMPRESSION_LZ4
+	bool "Build lz4 compressed kernel image"
+	help
+	  Build a kernel image using lz4
+	  compression with concatenated dtb.
 
 config BUILD_ARM64_UNCOMPRESSED_KERNEL
 	bool "Build uncompressed kernel image"

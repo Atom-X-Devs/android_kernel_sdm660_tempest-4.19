@@ -39,6 +39,26 @@ struct jeita_fv_cfg {
 	struct range_data		fv_cfg[MAX_STEP_CHG_ENTRIES];
 };
 
+struct cycle_fcc_cfg {
+	struct step_chg_jeita_param	param;
+	struct range_data		fcc_cfg[MAX_STEP_CHG_ENTRIES];
+};
+
+struct cycle_fv_cfg {
+	struct step_chg_jeita_param	param;
+	struct range_data		fv_cfg[MAX_STEP_CHG_ENTRIES];
+};
+
+struct chg_disable_cfg {
+	struct step_chg_jeita_param	param;
+	struct range_data		fv_cfg[MAX_STEP_CHG_ENTRIES];
+};
+
+struct rblt_fv_cfg {
+	struct step_chg_jeita_param	param;
+	struct range_data		rblt_cfg[MAX_STEP_CHG_ENTRIES];
+};
+
 struct step_chg_info {
 	struct device		*dev;
 	ktime_t			step_last_update_time;
@@ -49,28 +69,45 @@ struct step_chg_info {
 	bool			config_is_read;
 	bool			step_chg_cfg_valid;
 	bool			sw_jeita_cfg_valid;
+	bool			cycle_cfg_valid;
+	bool			rblt_cfg_valid;
+	bool			chg_disable_cfg_valid;
 	bool			soc_based_step_chg;
 	bool			ocv_based_step_chg;
 	bool			vbat_avg_based_step_chg;
+	bool			vnow_based_step_chg;
 	bool			batt_missing;
 	bool			taper_fcc;
 	bool			jeita_fcc_scaling;
 	int			jeita_fcc_index;
 	int			jeita_fv_index;
+	int			cycle_fcc_index;
+	int			cycle_fv_index;
 	int			step_index;
+	int			chg_disable_index;
+	int			rblt_fv_index;
 	int			get_config_retry_count;
 	int			jeita_last_update_temp;
 	int			jeita_fcc_scaling_temp_threshold[2];
 	long			jeita_max_fcc_ua;
 	long			jeita_fcc_step_size;
+	int			chg_profile;
 
 	struct step_chg_cfg	*step_chg_config;
 	struct jeita_fcc_cfg	*jeita_fcc_config;
 	struct jeita_fv_cfg	*jeita_fv_config;
 
+	struct cycle_fcc_cfg	*cycle_fcc_config;
+	struct cycle_fv_cfg	*cycle_fv_config;
+
+	struct chg_disable_cfg	*chg_disable_config;
+
+	struct rblt_fv_cfg	*rblt_fv_config;
+
 	struct votable		*fcc_votable;
 	struct votable		*fv_votable;
 	struct votable		*usb_icl_votable;
+	struct votable		*chg_disable_votable;
 	struct wakeup_source	*step_chg_ws;
 	struct power_supply	*batt_psy;
 	struct power_supply	*bms_psy;
@@ -83,9 +120,12 @@ struct step_chg_info {
 
 static struct step_chg_info *the_chip;
 
-#define STEP_CHG_HYSTERISIS_DELAY_US		5000000 /* 5 secs */
+#define STEP_CHG_HYSTERISIS_DELAY_US		1000000 /* 1 secs */
 
 #define BATT_HOT_DECIDEGREE_MAX			600
+#define CYCLE_COUNT_THRESHOLD_MAX	800
+/* Keep RBLT_THRESHOLD_MAX in sync with rblt_states enum in smb5-lib.h */
+#define RBLT_THRESHOLD_MAX		4
 #define GET_CONFIG_DELAY_MS		2000
 #define GET_CONFIG_RETRY_COUNT		50
 #define WAIT_BATT_ID_READY_MS		200
@@ -154,6 +194,24 @@ static bool is_input_present(struct step_chg_info *chip)
 		return true;
 
 	return false;
+}
+
+static int get_active_charge_profile(struct step_chg_info *chip)
+{
+	int rc;
+	union power_supply_propval pval = {0, };
+
+	rc = power_supply_get_property(chip->bms_psy,
+			POWER_SUPPLY_PROP_CHARGE_PROFILE, &pval);
+	if (rc < 0) {
+		pr_err("Get charge profile failed, rc=%d\n", rc);
+		goto chg_profile_err;
+	}
+
+	return pval.intval;
+
+chg_profile_err:
+	return rc;
 }
 
 int read_range_data_from_node(struct device_node *node,
@@ -238,6 +296,7 @@ static int get_step_chg_jeita_setting_from_profile(struct step_chg_info *chip)
 	int batt_id_ohms, rc, hysteresis[2] = {0};
 	u32 jeita_scaling_min_fcc_ua = 0;
 	union power_supply_propval prop = {0, };
+	char ranges[64] = {0};
 
 	handle = of_get_property(chip->dev->of_node,
 			"qcom,battery-data", NULL);
@@ -332,9 +391,21 @@ static int get_step_chg_jeita_setting_from_profile(struct step_chg_info *chip)
 		chip->step_chg_config->param.use_bms = true;
 	}
 
+	chip->vnow_based_step_chg =
+		of_property_read_bool(profile_node, "qcom,vnow-based-step-chg");
+	if (chip->vnow_based_step_chg) {
+		chip->step_chg_config->param.psy_prop =
+				POWER_SUPPLY_PROP_VOLTAGE_NOW;
+		chip->step_chg_config->param.prop_name = "V_NOW";
+		chip->step_chg_config->param.rise_hys = 0;
+		chip->step_chg_config->param.fall_hys = 0;
+	}
+
 	chip->step_chg_cfg_valid = true;
+	snprintf(ranges, ARRAY_SIZE(ranges), "qcom,step-chg-ranges-%d",
+			chip->chg_profile);
 	rc = read_range_data_from_node(profile_node,
-			"qcom,step-chg-ranges",
+			ranges,
 			chip->step_chg_config->fcc_cfg,
 			chip->soc_based_step_chg ? 100 : max_fv_uv,
 			max_fcc_ma * 1000);
@@ -345,8 +416,11 @@ static int get_step_chg_jeita_setting_from_profile(struct step_chg_info *chip)
 	}
 
 	chip->sw_jeita_cfg_valid = true;
+	memset(ranges, 0, ARRAY_SIZE(ranges) * sizeof(char));
+	snprintf(ranges, ARRAY_SIZE(ranges), "qcom,jeita-fcc-ranges-%d",
+			chip->chg_profile);
 	rc = read_range_data_from_node(profile_node,
-			"qcom,jeita-fcc-ranges",
+			ranges,
 			chip->jeita_fcc_config->fcc_cfg,
 			BATT_HOT_DECIDEGREE_MAX, max_fcc_ma * 1000);
 	if (rc < 0) {
@@ -364,8 +438,11 @@ static int get_step_chg_jeita_setting_from_profile(struct step_chg_info *chip)
 			hysteresis[0], hysteresis[1]);
 	}
 
+	memset(ranges, 0, ARRAY_SIZE(ranges) * sizeof(char));
+	snprintf(ranges, ARRAY_SIZE(ranges), "qcom,jeita-fv-ranges-%d",
+			chip->chg_profile);
 	rc = read_range_data_from_node(profile_node,
-			"qcom,jeita-fv-ranges",
+			ranges,
 			chip->jeita_fv_config->fv_cfg,
 			BATT_HOT_DECIDEGREE_MAX, max_fv_uv);
 	if (rc < 0) {
@@ -416,6 +493,58 @@ static int get_step_chg_jeita_setting_from_profile(struct step_chg_info *chip)
 			);
 	}
 
+	chip->cycle_cfg_valid = true;
+	memset(ranges, 0, ARRAY_SIZE(ranges) * sizeof(char));
+	snprintf(ranges, ARRAY_SIZE(ranges), "qcom,cycle-fcc-ranges-%d",
+			chip->chg_profile);
+	rc = read_range_data_from_node(profile_node,
+			ranges,
+			chip->cycle_fcc_config->fcc_cfg,
+			CYCLE_COUNT_THRESHOLD_MAX, max_fcc_ma * 1000);
+	if (rc < 0) {
+		pr_debug("Read qcom,cycle-fcc-ranges failed from battery profile, rc=%d\n",
+				rc);
+		chip->cycle_cfg_valid = false;
+	}
+
+	memset(ranges, 0, ARRAY_SIZE(ranges) * sizeof(char));
+	snprintf(ranges, ARRAY_SIZE(ranges), "qcom,cycle-fv-ranges-%d",
+			chip->chg_profile);
+	rc = read_range_data_from_node(profile_node,
+			ranges,
+			chip->cycle_fv_config->fv_cfg,
+			CYCLE_COUNT_THRESHOLD_MAX, max_fv_uv);
+	if (rc < 0) {
+		pr_debug("Read qcom,cycle-fv-ranges failed from battery profile, rc=%d\n",
+				rc);
+		chip->cycle_cfg_valid = false;
+	}
+
+	chip->rblt_cfg_valid = true;
+	rc = read_range_data_from_node(profile_node,
+			"qcom,rblt-ranges",
+			chip->rblt_fv_config->rblt_cfg,
+			RBLT_THRESHOLD_MAX, max_fv_uv);
+	if (rc < 0) {
+		pr_debug("Read qcom,rblt-ranges failed from battery profile, rc=%d\n",
+					rc);
+		chip->rblt_cfg_valid = false;
+	}
+
+	chip->chg_disable_cfg_valid = true;
+	memset(ranges, 0, ARRAY_SIZE(ranges) * sizeof(char));
+	snprintf(ranges, ARRAY_SIZE(ranges), "qcom,chg-disable-ranges-%d",
+			chip->chg_profile);
+	rc = read_range_data_from_node(profile_node,
+			ranges,
+			chip->chg_disable_config->fv_cfg,
+			max_fv_uv, 1);
+	if (rc < 0) {
+		pr_debug("Read qcom,chg-disable-ranges failed from battery profile, rc=%d\n",
+				rc);
+		chip->chg_disable_cfg_valid = false;
+	}
+
 	return rc;
 }
 
@@ -456,6 +585,26 @@ static void get_config_work(struct work_struct *work)
 			chip->jeita_fv_config->fv_cfg[i].low_threshold,
 			chip->jeita_fv_config->fv_cfg[i].high_threshold,
 			chip->jeita_fv_config->fv_cfg[i].value);
+	for (i = 0; i < MAX_STEP_CHG_ENTRIES; i++)
+		pr_debug("cycle-fcc-cfg: %d cycles ~ %d cycles, %duA\n",
+			chip->cycle_fcc_config->fcc_cfg[i].low_threshold,
+			chip->cycle_fcc_config->fcc_cfg[i].high_threshold,
+			chip->cycle_fcc_config->fcc_cfg[i].value);
+	for (i = 0; i < MAX_STEP_CHG_ENTRIES; i++)
+		pr_debug("cycle-fv-cfg: %d cycles ~ %d cycles, %duV\n",
+			chip->cycle_fv_config->fv_cfg[i].low_threshold,
+			chip->cycle_fv_config->fv_cfg[i].high_threshold,
+			chip->cycle_fv_config->fv_cfg[i].value);
+	for (i = 0; i < MAX_STEP_CHG_ENTRIES; i++)
+		pr_debug("chg-disable-cfg: %duV(SoC) ~ %duV(SoC), %d\n",
+			chip->chg_disable_config->fv_cfg[i].low_threshold,
+			chip->chg_disable_config->fv_cfg[i].high_threshold,
+			chip->chg_disable_config->fv_cfg[i].value);
+	for (i = 0; i < MAX_STEP_CHG_ENTRIES; i++)
+		pr_debug("rblt-fv-cfg: state: %d ~ state:%d, %duV\n",
+			chip->rblt_fv_config->rblt_cfg[i].low_threshold,
+			chip->rblt_fv_config->rblt_cfg[i].high_threshold,
+			chip->rblt_fv_config->rblt_cfg[i].value);
 
 	return;
 
@@ -746,7 +895,9 @@ static void handle_jeita_fcc_scaling(struct step_chg_info *chip)
 static int handle_jeita(struct step_chg_info *chip)
 {
 	union power_supply_propval pval = {0, };
-	int rc = 0, fcc_ua = 0, fv_uv = 0;
+	int rc = 0, fcc_ua = 0, jeita_fcc_ua = 0, cycle_fcc_ua = 0;
+	u32 fv_uv = 0, jeita_fv_uv = 0, cycle_fv_uv = 0, rblt_fv_uv = 0;
+	int chg_disable = false;
 	u64 elapsed_us;
 
 	rc = power_supply_get_property(chip->batt_psy,
@@ -794,10 +945,28 @@ static int handle_jeita(struct step_chg_info *chip)
 			chip->jeita_fcc_index,
 			pval.intval,
 			&chip->jeita_fcc_index,
-			&fcc_ua);
+			&jeita_fcc_ua);
 	if (rc < 0)
-		fcc_ua = 0;
+		jeita_fcc_ua = 0;
 
+	fcc_ua = jeita_fcc_ua;
+
+	if (!chip->cycle_cfg_valid)
+		goto find_fcc_votable;
+
+	rc = get_val(chip->cycle_fcc_config->fcc_cfg,
+			chip->cycle_fcc_config->param.rise_hys,
+			chip->cycle_fcc_config->param.fall_hys,
+			chip->cycle_fcc_index,
+			pval.intval,
+			&chip->cycle_fcc_index,
+			&cycle_fcc_ua);
+	if (rc < 0)
+		cycle_fcc_ua = 0;
+
+	fcc_ua = min(jeita_fcc_ua, cycle_fcc_ua);
+
+find_fcc_votable:
 	if (!chip->fcc_votable)
 		chip->fcc_votable = find_votable("FCC");
 	if (!chip->fcc_votable)
@@ -812,14 +981,85 @@ static int handle_jeita(struct step_chg_info *chip)
 			chip->jeita_fv_index,
 			pval.intval,
 			&chip->jeita_fv_index,
-			&fv_uv);
+			&jeita_fv_uv);
 	if (rc < 0)
-		fv_uv = 0;
+		jeita_fv_uv = 0;
 
-	chip->fv_votable = find_votable("FV");
+	fv_uv = jeita_fv_uv;
+
+	if (!chip->cycle_cfg_valid)
+		goto find_fv_votable;
+
+	rc = get_val(chip->cycle_fv_config->fv_cfg,
+			chip->cycle_fv_config->param.rise_hys,
+			chip->cycle_fv_config->param.fall_hys,
+			chip->cycle_fv_index,
+			pval.intval,
+			&chip->cycle_fv_index,
+			&cycle_fv_uv);
+	if (rc < 0)
+		cycle_fv_uv = 0;
+
+	fv_uv = min(jeita_fv_uv, cycle_fv_uv);
+
+find_fv_votable:
+	if (!chip->fv_votable)
+		chip->fv_votable = find_votable("FV");
 	if (!chip->fv_votable)
 		goto update_time;
 
+	if (!chip->rblt_cfg_valid)
+		goto find_chg_disable_votable;
+
+	/*
+	 * If battery pack RBLT state shows warning/critical we will reduce
+	 * the max charging voltage.
+	 */
+	rc = power_supply_get_property(chip->batt_psy,
+		POWER_SUPPLY_PROP_RBLT_STATE, &pval);
+	if (rc < 0) {
+		pr_err("Get rblt value failed, rc=%d\n", rc);
+		goto find_chg_disable_votable;
+	}
+	rc = get_val(chip->rblt_fv_config->rblt_cfg,
+			chip->rblt_fv_config->param.rise_hys,
+			chip->rblt_fv_config->param.fall_hys,
+			chip->rblt_fv_index,
+			pval.intval,
+			&chip->rblt_fv_index,
+			&rblt_fv_uv);
+	if (rc < 0)
+		rblt_fv_uv = fv_uv;
+
+	fv_uv = min(fv_uv, rblt_fv_uv);
+
+find_chg_disable_votable:
+	if (!chip->chg_disable_votable)
+		chip->chg_disable_votable = find_votable("CHG_DISABLE");
+
+	if (!chip->chg_disable_votable)
+		goto find_usb_icl;
+
+	if (!chip->chg_disable_cfg_valid)
+		goto find_usb_icl;
+
+	rc = power_supply_get_property(chip->batt_psy,
+			chip->chg_disable_config->param.psy_prop, &pval);
+	if (!rc) {
+		rc = get_val(chip->chg_disable_config->fv_cfg,
+				chip->chg_disable_config->param.rise_hys,
+				chip->chg_disable_config->param.fall_hys,
+				chip->chg_disable_index,
+				pval.intval,
+				&chip->chg_disable_index,
+				&chg_disable);
+		if (rc < 0)
+			chg_disable = false;
+
+		vote(chip->chg_disable_votable, JEITA_VOTER, chg_disable, 0);
+	}
+
+find_usb_icl:
 	if (!chip->usb_icl_votable)
 		chip->usb_icl_votable = find_votable("USB_ICL");
 
@@ -934,6 +1174,7 @@ static int step_chg_notifier_call(struct notifier_block *nb,
 {
 	struct power_supply *psy = v;
 	struct step_chg_info *chip = container_of(nb, struct step_chg_info, nb);
+	int chg_profile = 0;
 
 	if (ev != PSY_EVENT_PROP_CHANGED)
 		return NOTIFY_OK;
@@ -947,8 +1188,17 @@ static int step_chg_notifier_call(struct notifier_block *nb,
 	if ((strcmp(psy->desc->name, "bms") == 0)) {
 		if (chip->bms_psy == NULL)
 			chip->bms_psy = psy;
-		if (!chip->config_is_read)
+		if (!chip->config_is_read) {
 			schedule_delayed_work(&chip->get_config_work, 0);
+		} else {
+			chg_profile = get_active_charge_profile(chip);
+			if (chg_profile >= 0 &&
+					chg_profile != chip->chg_profile) {
+				chip->chg_profile = chg_profile;
+				schedule_delayed_work(
+						&chip->get_config_work, 0);
+			}
+		}
 	}
 
 	return NOTIFY_OK;
@@ -994,6 +1244,10 @@ int qcom_step_chg_init(struct device *dev,
 	chip->step_index = -EINVAL;
 	chip->jeita_fcc_index = -EINVAL;
 	chip->jeita_fv_index = -EINVAL;
+	chip->cycle_fcc_index = -EINVAL;
+	chip->cycle_fv_index = -EINVAL;
+	chip->chg_disable_index = -EINVAL;
+	chip->rblt_fv_index = -EINVAL;
 
 	chip->step_chg_config = devm_kzalloc(dev,
 			sizeof(struct step_chg_cfg), GFP_KERNEL);
@@ -1012,6 +1266,13 @@ int qcom_step_chg_init(struct device *dev,
 	if (!chip->jeita_fcc_config || !chip->jeita_fv_config)
 		return -ENOMEM;
 
+	chip->cycle_fcc_config = devm_kzalloc(dev,
+			sizeof(struct cycle_fcc_cfg), GFP_KERNEL);
+	chip->cycle_fv_config = devm_kzalloc(dev,
+			sizeof(struct cycle_fv_cfg), GFP_KERNEL);
+	if (!chip->cycle_fcc_config || !chip->cycle_fv_config)
+		return -ENOMEM;
+
 	chip->jeita_fcc_config->param.psy_prop = POWER_SUPPLY_PROP_TEMP;
 	chip->jeita_fcc_config->param.prop_name = "BATT_TEMP";
 	chip->jeita_fcc_config->param.rise_hys = 10;
@@ -1020,6 +1281,35 @@ int qcom_step_chg_init(struct device *dev,
 	chip->jeita_fv_config->param.prop_name = "BATT_TEMP";
 	chip->jeita_fv_config->param.rise_hys = 10;
 	chip->jeita_fv_config->param.fall_hys = 10;
+
+	chip->cycle_fcc_config->param.psy_prop = POWER_SUPPLY_PROP_CYCLE_COUNT;
+	chip->cycle_fcc_config->param.prop_name = "CYCLE_COUNT";
+	chip->cycle_fcc_config->param.rise_hys = 0;
+	chip->cycle_fcc_config->param.fall_hys = 0;
+	chip->cycle_fv_config->param.psy_prop = POWER_SUPPLY_PROP_CYCLE_COUNT;
+	chip->cycle_fv_config->param.prop_name = "CYCLE_COUNT";
+	chip->cycle_fv_config->param.rise_hys = 0;
+	chip->cycle_fv_config->param.fall_hys = 0;
+
+	chip->chg_disable_config = devm_kzalloc(dev,
+			sizeof(struct chg_disable_cfg), GFP_KERNEL);
+	if (!chip->chg_disable_config)
+		return -ENOMEM;
+
+	chip->chg_disable_config->param.psy_prop = POWER_SUPPLY_PROP_VOLTAGE_NOW;
+	chip->chg_disable_config->param.prop_name = "VBATT";
+	chip->chg_disable_config->param.rise_hys = 100000;
+	chip->chg_disable_config->param.fall_hys = 100000;
+
+	chip->rblt_fv_config = devm_kzalloc(dev,
+			sizeof(struct rblt_fv_cfg), GFP_KERNEL);
+	if (!chip->rblt_fv_config)
+		return -ENOMEM;
+
+	chip->rblt_fv_config->param.psy_prop = POWER_SUPPLY_PROP_RBLT;
+	chip->rblt_fv_config->param.prop_name = "RBLT";
+	chip->rblt_fv_config->param.rise_hys = 0;
+	chip->rblt_fv_config->param.fall_hys = 0;
 
 	INIT_DELAYED_WORK(&chip->status_change_work, status_change_work);
 	INIT_DELAYED_WORK(&chip->get_config_work, get_config_work);

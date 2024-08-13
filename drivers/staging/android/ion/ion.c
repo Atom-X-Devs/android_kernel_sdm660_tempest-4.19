@@ -69,7 +69,7 @@ bool ion_buffer_cached(struct ion_buffer *buffer)
 	return !!(buffer->flags & ION_FLAG_CACHED);
 }
 
-/* this function should only be called while dev->lock is held */
+/* this function should only be called while dev->buffer_lock is held */
 static void ion_buffer_add(struct ion_device *dev,
 			   struct ion_buffer *buffer)
 {
@@ -139,6 +139,7 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 	INIT_LIST_HEAD(&buffer->attachments);
 	INIT_LIST_HEAD(&buffer->vmas);
 	mutex_init(&buffer->lock);
+	kref_init(&buffer->kref);
 
 	if (IS_ENABLED(CONFIG_ION_FORCE_DMA_SYNC)) {
 		int i;
@@ -181,8 +182,9 @@ void ion_buffer_destroy(struct ion_buffer *buffer)
 	kfree(buffer);
 }
 
-static void _ion_buffer_destroy(struct ion_buffer *buffer)
+static void _ion_buffer_destroy(struct kref *kref)
 {
+	struct ion_buffer *buffer = container_of(kref, struct ion_buffer, kref);
 	struct ion_heap *heap = buffer->heap;
 	struct ion_device *dev = buffer->dev;
 
@@ -198,6 +200,16 @@ static void _ion_buffer_destroy(struct ion_buffer *buffer)
 		ion_heap_freelist_add(heap, buffer);
 	else
 		ion_buffer_destroy(buffer);
+}
+
+static void _ion_buffer_put(struct ion_buffer *buffer)
+{
+	kref_put(&buffer->kref, _ion_buffer_destroy);
+}
+
+static inline bool _ion_buffer_get(struct ion_buffer *buffer)
+{
+	return !!kref_get_unless_zero(&buffer->kref);
 }
 
 static void *ion_buffer_kmap_get(struct ion_buffer *buffer)
@@ -312,7 +324,7 @@ static void ion_dma_buf_detatch(struct dma_buf *dmabuf,
 	struct ion_buffer *buffer = dmabuf->priv;
 
 	mutex_lock(&buffer->lock);
-	list_del(&a->list);
+	list_del_init(&a->list);
 	mutex_unlock(&buffer->lock);
 	free_duped_table(a->table);
 
@@ -496,7 +508,11 @@ static void ion_dma_buf_release(struct dma_buf *dmabuf)
 {
 	struct ion_buffer *buffer = dmabuf->priv;
 
-	_ion_buffer_destroy(buffer);
+	mutex_lock(&buffer->lock);
+	buffer->dmabuf = NULL;
+	mutex_unlock(&buffer->lock);
+
+	_ion_buffer_put(buffer);
 	kfree(dmabuf->exp_name);
 }
 
@@ -1084,8 +1100,10 @@ struct dma_buf *ion_alloc_dmabuf(size_t len, unsigned int heap_id_mask,
 
 	dmabuf = dma_buf_export(&exp_info);
 	if (IS_ERR(dmabuf)) {
-		_ion_buffer_destroy(buffer);
+		_ion_buffer_put(buffer);
 		kfree(exp_info.exp_name);
+	} else {
+		buffer->dmabuf = dmabuf;
 	}
 
 	return dmabuf;
@@ -1220,6 +1238,362 @@ static const struct file_operations debug_heap_fops = {
 	.llseek = seq_lseek,
 	.release = single_release,
 };
+
+struct ion_orphan_proc {
+	pid_t tgid;
+	int count;
+	struct hlist_node node;
+};
+
+struct ion_orphan_proc_ref {
+	struct hlist_head *head;
+	struct dma_buf *dmabuf;
+	pid_t tgid;
+};
+
+struct ion_orphan_buf_ref {
+	struct hlist_node node;
+	struct ion_buffer *buf;
+};
+
+extern int iterate_fd(struct files_struct *, unsigned,
+	int (*)(const void *, struct file *, unsigned), const void *);
+
+static int fd_info(const void *data, struct file *file, unsigned int n)
+{
+	struct ion_orphan_proc_ref *ref = (struct ion_orphan_proc_ref *)data;
+	struct ion_orphan_proc *proc;
+
+	if (!dma_buf_is_dma_buf_file(file))
+		return 0;
+
+	if (file->private_data != ref->dmabuf)
+		return 0;
+
+	proc = kzalloc(sizeof(*proc), GFP_ATOMIC);
+	if (!proc)
+		return -ENOMEM;
+
+	if (!hlist_empty(ref->head)) {
+		struct ion_orphan_proc *e;
+		e = hlist_entry(ref->head->first, struct ion_orphan_proc, node);
+		proc->count = e->count + 1;
+	} else {
+		proc->count = 1;
+	}
+
+	proc->tgid = ref->tgid;
+	hlist_add_head(&proc->node, ref->head);
+	/* break out of the iteration once a matching file is found */
+	return 1;
+}
+
+static int ion_debug_orphan_procs(struct hlist_head *head, struct dma_buf *dmabuf)
+{
+	struct task_struct *task, *thr;
+	struct ion_orphan_proc_ref ref = { .head = head, .dmabuf = dmabuf };
+	int ret = 0;
+
+	rcu_read_lock();
+	for_each_process_thread(task, thr) {
+		struct files_struct *proc_files = task->group_leader->files;
+		int do_iter;
+
+		ref.tgid = task_tgid_nr(task);
+		task_lock(thr);
+		do_iter = thr->files != proc_files || thr == task->group_leader;
+		if (do_iter)
+			ret = iterate_fd(thr->files, 0, fd_info, &ref);
+		task_unlock(thr);
+
+		if (ret > 0)
+			break;
+		else if (ret < 0)
+			goto out;
+	}
+
+out:
+	rcu_read_unlock();
+	return ret < 0 ? ret : 0;
+}
+
+static int ion_debug_orphan_show_one(struct seq_file *s, struct ion_buffer *b)
+{
+	HLIST_HEAD(proclist);
+	struct ion_orphan_proc *proc;
+	struct hlist_node *hn;
+	struct dma_buf *dmabuf;
+	int first = 1;
+	int ret;
+
+	ret = mutex_lock_interruptible(&b->lock);
+	if (ret)
+		return ret;
+
+	/*
+	 * there is a small chance that this function will be called between
+	 * the time the ion_buffer is added to the rb_tree but before the
+	 * dmabuf is exported, or between the time the dmabuf is released and
+	 * the ion_buffer is destroyed. alternately, the dmabuf may have been
+	 * attached to a driver (or mmap'ed) between the time that the rb_tree
+	 * was walked and the time that this function is called, in which case
+	 * the buffer is no longer an orphan. check for all these cases with
+	 * the per-buffer lock held, and ignore all of them.
+	 */
+	if (!b->dmabuf || !list_empty(&b->attachments)) {
+		mutex_unlock(&b->lock);
+		return 0;
+	}
+#ifdef CONFIG_MEMCG
+	if (!list_empty(&b->vmas)) {
+		mutex_unlock(&b->lock);
+		return 0;
+	}
+#endif
+
+	seq_printf(s, "%s %s %zu -", b->dmabuf->name, b->heap->name, b->size);
+	dmabuf = b->dmabuf;
+	mutex_unlock(&b->lock);
+
+	ret = ion_debug_orphan_procs(&proclist, dmabuf);
+	if (ret) {
+		pr_err("%s: error %d iterating process fds\n", __func__, ret);
+		goto out;
+	}
+
+	hlist_for_each_entry(proc, &proclist, node) {
+		if (unlikely(first)) {
+			seq_printf(s, " %d", proc->count);
+			first = 0;
+		}
+		seq_printf(s, " %d", proc->tgid);
+	}
+
+out:
+	/*
+	 * in the unlikely event that the dmabuf is in the middle of being
+	 * freed, report that no processes have any open fds referencing it
+	 */
+	seq_printf(s, "%s\n", first ? " 0" : "");
+	hlist_for_each_entry_safe(proc, hn, &proclist, node) {
+		hlist_del(&proc->node);
+		kfree(proc);
+	}
+
+	return ret;
+}
+
+static int ion_debug_orphan_show(struct seq_file *s, void *unused)
+{
+	HLIST_HEAD(buflist);
+	struct ion_orphan_buf_ref *bufref;
+	struct hlist_node *hn;
+	struct ion_device *idev = s->private;
+	struct rb_node *rn;
+	int ret = 0;
+
+	if ((ret = mutex_lock_interruptible(&idev->buffer_lock)) != 0)
+		return ret;
+
+	preempt_disable();
+	for (rn = rb_first(&idev->buffers); rn && !ret; rn = rb_next(rn)) {
+		struct ion_buffer *buf = rb_entry(rn, struct ion_buffer, node);
+
+		if (unlikely(list_empty_careful(&buf->attachments)) &&
+#ifdef CONFIG_MEMCG
+				unlikely(list_empty_careful(&buf->vmas)) &&
+#endif
+				_ion_buffer_get(buf)) {
+			bufref = kzalloc(sizeof(*bufref), GFP_ATOMIC);
+			if (bufref) {
+				bufref->buf = buf;
+				hlist_add_head(&bufref->node, &buflist);
+			} else {
+				ret = -ENOMEM;
+			}
+		}
+	}
+
+	preempt_enable_no_resched();
+	mutex_unlock(&idev->buffer_lock);
+
+	hlist_for_each_entry_safe(bufref, hn, &buflist, node) {
+		/*
+		 * the ion buffers might be modified while this loop executes,
+		 * so ion_debug_orphan_show_one should verify that the buffer
+		 * is still orphaned before printing it to the file
+		 */
+		if (!ret)
+			ret = ion_debug_orphan_show_one(s, bufref->buf);
+		_ion_buffer_put(bufref->buf);
+		hlist_del(&bufref->node);
+		kfree(bufref);
+	}
+
+	return ret;
+}
+
+static int ion_proc_orphan_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, ion_debug_orphan_show, PDE_DATA(inode));
+}
+
+static const struct file_operations proc_orphan_fops = {
+	.open = ion_proc_orphan_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+#ifdef CONFIG_MEMCG
+struct ion_unattached_mapped_ref {
+	struct hlist_node node;
+	pid_t tgid;
+};
+
+static int _track_tgid(struct hlist_head *hlist, int *count, pid_t tgid)
+{
+	struct ion_unattached_mapped_ref *ref;
+
+	hlist_for_each_entry(ref, hlist, node) {
+		if (ref->tgid == tgid)
+			return 0;
+	}
+
+	ref = kzalloc(sizeof(*ref), GFP_ATOMIC);
+	if (!ref)
+		return -ENOMEM;
+
+	ref->tgid = tgid;
+	hlist_add_head(&ref->node, hlist);
+	(*count)++;
+
+	return 0;
+}
+
+static int ion_debug_unattached_mapped_show_one(struct seq_file *s,
+		struct ion_buffer *b)
+{
+	HLIST_HEAD(reflist);
+	struct ion_unattached_mapped_ref first_ref, *ref;
+	struct ion_vma_list *vma_list;
+	struct hlist_node *hn;
+	int ret = 0, count = 0;
+
+	ret = mutex_lock_interruptible(&b->lock);
+	if (ret)
+		return ret;
+
+	/*
+	 * Bail out if this buffer was either attached to a driver or all of its
+	 * mappings were destroyed while we were waiting for the mutex.
+	 */
+	if (!b->dmabuf || !list_empty(&b->attachments) || list_empty(&b->vmas)) {
+		mutex_unlock(&b->lock);
+		return 0;
+	}
+
+	list_for_each_entry(vma_list, &b->vmas, list) {
+		struct vm_area_struct *vma = vma_list->vma;
+
+		if (vma->vm_mm->owner) {
+			/* `owner` is only present with CONFIG_MEMCG! */
+			pid_t tgid = task_tgid_nr(vma->vm_mm->owner);
+
+			if (!count) {
+				first_ref.tgid = tgid;
+				hlist_add_head(&first_ref.node, &reflist);
+				count = 1;
+			} else {
+				ret = _track_tgid(&reflist, &count, tgid);
+				if (ret)
+					goto err;
+			}
+		}
+	}
+
+
+	/* If there's nothing to print then dump out now. */
+	if (unlikely(hlist_empty(&reflist))) {
+		mutex_unlock(&b->lock);
+		return 0;
+	}
+
+	seq_printf(s, "%s %s %zu - %d", b->dmabuf->name, b->heap->name, b->size,
+			count);
+	mutex_unlock(&b->lock);
+
+	hlist_for_each_entry_safe(ref, hn, &reflist, node) {
+		seq_printf(s, " %d", ref->tgid);
+
+		/*
+		 * The first entry added to the list is a stack reference so it
+		 * doesn't need to be freed.
+		 */
+		if (ref != &first_ref)
+			kfree(ref);
+	}
+
+	seq_putc(s, '\n');
+	return 0;
+
+err:
+	/*
+	 * If we failed to allocate a node in _track_tgid above then don't print
+	 * anything, just bail out. Better to just have the caller retry once
+	 * there's more memory available.
+	 */
+	hlist_for_each_entry_safe(ref, hn, &reflist, node) {
+		if (ref != &first_ref)
+			kfree(ref);
+	}
+
+	return ret;
+}
+
+static int ion_debug_unattached_mapped_show(struct seq_file *s, void *unused)
+{
+	struct ion_device *idev = s->private;
+	struct rb_node *rn;
+	int ret = 0;
+
+	if ((ret = mutex_lock_interruptible(&idev->buffer_lock)) != 0)
+		return ret;
+
+	for (rn = rb_first(&idev->buffers); rn && !ret; rn = rb_next(rn)) {
+		struct ion_buffer *buf = rb_entry(rn, struct ion_buffer, node);
+
+		if (list_empty(&buf->attachments) && !list_empty(&buf->vmas) &&
+				_ion_buffer_get(buf)) {
+			ret = ion_debug_unattached_mapped_show_one(s, buf);
+			_ion_buffer_put(buf);
+
+			if (ret)
+				goto err;
+		}
+	}
+
+err:
+	mutex_unlock(&idev->buffer_lock);
+
+	return ret;
+}
+
+static int ion_proc_unattached_mapped_open(struct inode *inode,
+		struct file *file)
+{
+	return single_open(file, ion_debug_unattached_mapped_show,
+			PDE_DATA(inode));
+}
+
+static const struct file_operations proc_unattached_mapped_fops = {
+	.open = ion_proc_unattached_mapped_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+#endif
 
 static int debug_shrink_set(void *data, u64 val)
 {
@@ -1359,6 +1733,22 @@ static int ion_init_sysfs(void)
 	return 0;
 }
 
+/*
+ * Helper function to create procfs endpoint and pirnt error.
+ * Note: read file only for now through hardcoding the permissions, to
+ *       avoid privilege escalation.
+ */
+static void procfs_create_file(
+				struct ion_device *idev,
+				const char *filename,
+				const struct file_operations *proc_fops)
+{
+	if (!proc_create_data(filename, 0444, idev->proc_ion_root,
+				 proc_fops, idev)) {
+		pr_err("Failed to create procfs node /proc/ion/%s", filename);
+	}
+}
+
 struct ion_device *ion_device_create(void)
 {
 	struct ion_device *idev;
@@ -1385,11 +1775,18 @@ struct ion_device *ion_device_create(void)
 	}
 
 	idev->debug_root = debugfs_create_dir("ion", NULL);
+	idev->proc_ion_root = proc_mkdir("ion", NULL);
 	idev->buffers = RB_ROOT;
 	mutex_init(&idev->buffer_lock);
 	init_rwsem(&idev->lock);
 	plist_head_init(&idev->heaps);
 	internal_dev = idev;
+
+	procfs_create_file(idev, "orphans", &proc_orphan_fops);
+#ifdef CONFIG_MEMCG
+	procfs_create_file(idev, "unattached_mapped", &proc_unattached_mapped_fops);
+#endif
+
 	return idev;
 
 err_sysfs:

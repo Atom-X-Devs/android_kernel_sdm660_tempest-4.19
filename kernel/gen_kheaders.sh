@@ -9,6 +9,8 @@ outdir="$(pwd)"
 tarfile=$1
 cpio_dir=$outdir/$tarfile.tmp
 
+CPIO=${CPIO:-cpio}
+
 dir_list="
 include/
 arch/$SRCARCH/include/
@@ -58,18 +60,18 @@ mkdir $cpio_dir
 pushd $srctree > /dev/null
 for f in $dir_list;
 	do find "$f" -name "*.h";
-done | cpio --quiet -pd $cpio_dir
+done | ${CPIO} --quiet -pd $cpio_dir
 popd > /dev/null
 
 # The second CPIO can complain if files already exist which can
 # happen with out of tree builds. Just silence CPIO for now.
 for f in $dir_list;
 	do find "$f" -name "*.h";
-done | cpio --quiet -pd $cpio_dir >/dev/null 2>&1
+done | ${CPIO} --quiet -pd $cpio_dir >/dev/null 2>&1
 
 # Remove comments except SDPX lines
 find $cpio_dir -type f -print0 |
-	xargs -0 -P8 -n1 perl -pi -e 'BEGIN {undef $/;}; s/\/\*((?!SPDX).)*?\*\///smg;'
+	xargs -0 -n1 perl -pi -e 'BEGIN {undef $/;}; s/\/\*((?!SPDX).)*?\*\///smg;'
 
 tar -Jcf $tarfile -C $cpio_dir/ . > /dev/null
 

@@ -370,6 +370,9 @@ found:
 		goto out;
 	}
 
+	if (d_really_is_negative(lower_dentry))
+		err = -ENOENT;
+
 	lower_path.dentry = lower_dentry;
 	lower_path.mnt = mntget(lower_dir_mnt);
 

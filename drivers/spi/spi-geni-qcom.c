@@ -163,11 +163,13 @@ struct spi_geni_master {
 	bool shared_ee; /* Dual EE use case */
 	bool dis_autosuspend;
 	bool cmd_done;
+	bool use_fixed_timeout;
 	bool set_miso_sampling;
 	u32 miso_sampling_ctrl_val;
 	int set_cs_sb_delay; /*SB PIPE Delay */
 	int set_pre_cmd_dly; /*Pre command Delay */
-	bool use_fixed_timeout;
+	int set_cs_clk_delay; /* Cycles before and after clock */
+	int set_inter_words_delay; /* Cycles between words */
 };
 
 static struct spi_master *get_spi_master(struct device *dev)
@@ -272,7 +274,8 @@ static int setup_fifo_params(struct spi_device *spi_slv,
 	int ret = 0;
 	int idx;
 	int div;
-	struct spi_geni_qcom_ctrl_data *delay_params = NULL;
+	u32 cs_clk_delay = mas->set_cs_clk_delay;
+	u32 inter_words_delay = mas->set_inter_words_delay;
 	u32 spi_delay_params = 0;
 
 	loopback_cfg &= ~LOOPBACK_MSK;
@@ -292,19 +295,16 @@ static int setup_fifo_params(struct spi_device *spi_slv,
 		demux_output_inv |= BIT(spi_slv->chip_select);
 
 	if (spi_slv->controller_data) {
-		u32 cs_clk_delay = 0;
-		u32 inter_words_delay = 0;
+		struct spi_geni_qcom_ctrl_data *delay_params =
+			(struct spi_geni_qcom_ctrl_data *)spi_slv->controller_data;
+		cs_clk_delay = delay_params->spi_cs_clk_delay;
+		inter_words_delay = delay_params->spi_inter_words_delay;
+	}
 
-		delay_params =
-		(struct spi_geni_qcom_ctrl_data *) spi_slv->controller_data;
-		cs_clk_delay =
-		(delay_params->spi_cs_clk_delay << SPI_CS_CLK_DELAY_SHFT)
-							& SPI_CS_CLK_DELAY_MSK;
-		inter_words_delay =
-			delay_params->spi_inter_words_delay &
-						SPI_INTER_WORDS_DELAY_MSK;
+	if (cs_clk_delay || inter_words_delay) {
 		spi_delay_params =
-		(inter_words_delay | cs_clk_delay);
+			((cs_clk_delay << SPI_CS_CLK_DELAY_SHFT) & SPI_CS_CLK_DELAY_MSK) |
+			 (inter_words_delay & SPI_INTER_WORDS_DELAY_MSK);
 	}
 
 	demux_sel = spi_slv->chip_select;
@@ -568,8 +568,8 @@ static int setup_gsi_xfer(struct spi_transfer *xfer,
 	int go_flags = 0;
 	unsigned long flags = DMA_PREP_INTERRUPT | DMA_CTRL_ACK;
 	struct spi_geni_qcom_ctrl_data *delay_params = NULL;
-	u32 cs_clk_delay = 0;
-	u32 inter_words_delay = 0;
+	u32 cs_clk_delay = mas->set_cs_clk_delay;
+	u32 inter_words_delay = mas->set_inter_words_delay;
 
 	if (spi_slv->controller_data) {
 		delay_params =
@@ -908,7 +908,7 @@ static int spi_geni_prepare_transfer_hardware(struct spi_master *spi)
 {
 	struct spi_geni_master *mas = spi_master_get_devdata(spi);
 	int ret = 0, count = 0;
-	u32 max_speed = spi->cur_msg->spi->max_speed_hz;
+	u32 max_speed = spi->max_speed_hz;
 	struct se_geni_rsc *rsc = &mas->spi_rsc;
 	u32 cfg_reg108;
 
@@ -1769,6 +1769,18 @@ static int spi_geni_probe(struct platform_device *pdev)
 		geni_mas->set_pre_cmd_dly = geni_mas->set_cs_sb_delay;
 	}
 
+	if (!of_property_read_u32(pdev->dev.of_node,
+		"qcom,set-cs-clk-delay", &geni_mas->set_cs_clk_delay)) {
+		dev_dbg(&pdev->dev, "CS CLK delay set: %d",
+			geni_mas->set_cs_clk_delay);
+	}
+
+	if (!of_property_read_u32(pdev->dev.of_node,
+		"qcom,set-inter-words-delay", &geni_mas->set_inter_words_delay)) {
+		dev_dbg(&pdev->dev, "Inter-words delay set: %d",
+			geni_mas->set_inter_words_delay);
+	}
+
 	geni_mas->phys_addr = res->start;
 	geni_mas->size = resource_size(res);
 	geni_mas->base = devm_ioremap(&pdev->dev, res->start,
@@ -1902,13 +1914,22 @@ static int spi_geni_suspend(struct device *dev)
 	struct spi_geni_master *geni_mas = spi_master_get_devdata(spi);
 
 	if (!pm_runtime_status_suspended(dev)) {
-		GENI_SE_ERR(geni_mas->ipc, true, dev,
-			":%s: runtime PM is active\n", __func__);
-		ret = -EBUSY;
-		return ret;
+		if (list_empty(&spi->queue) && !spi->cur_msg) {
+			GENI_SE_ERR(geni_mas->ipc, true, dev,
+				"%s: Force suspend", __func__);
+			ret = spi_geni_runtime_suspend(dev);
+			if (ret) {
+				GENI_SE_ERR(geni_mas->ipc, true, dev,
+					"Force suspend Failed:%d", ret);
+			} else {
+				pm_runtime_disable(dev);
+				pm_runtime_set_suspended(dev);
+				pm_runtime_enable(dev);
+			}
+		} else {
+			ret = -EBUSY;
+		}
 	}
-
-	GENI_SE_ERR(geni_mas->ipc, true, dev, ":%s: End\n", __func__);
 	return ret;
 }
 #else

@@ -85,6 +85,7 @@ modules.builtin
 !.mailmap
 !.cocciconfig
 !.clang-format
+!.ignore
 
 #
 # Generated include files
@@ -133,11 +134,16 @@ all.config
 # Kdevelop4
 *.kdev4
 
+# Clang's compilation database file
+/compile_commands.json
+
 # fetched Android config fragments
 kernel/configs/android-*.cfg
 
-# vendor device tree directories
+# directories mapped in via AOSP repo
 arch/arm64/boot/dts/vendor/
-
-# Tech package directories
+drivers/staging/fw-api/
+drivers/staging/oculus/
+drivers/staging/qca-wifi-host-cmn/
+drivers/staging/qcacld-3.0/
 techpack/

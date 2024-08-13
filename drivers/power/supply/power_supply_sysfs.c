@@ -468,6 +468,11 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(voltage_step),
 	POWER_SUPPLY_ATTR(apsd_rerun),
 	POWER_SUPPLY_ATTR(apsd_timeout),
+	POWER_SUPPLY_ATTR(rblt),
+	POWER_SUPPLY_ATTR(rblt_state),
+	POWER_SUPPLY_ATTR(charge_profile),
+	POWER_SUPPLY_ATTR(charge_capacity_limit),
+	POWER_SUPPLY_ATTR(output_current_limit),
 	/* Charge pump properties */
 	POWER_SUPPLY_ATTR(cp_status1),
 	POWER_SUPPLY_ATTR(cp_status2),
@@ -484,6 +489,9 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(cc_toggle_enable),
 	POWER_SUPPLY_ATTR(fg_type),
 	POWER_SUPPLY_ATTR(charger_status),
+	POWER_SUPPLY_ATTR(moisture_detection_enabled),
+	POWER_SUPPLY_ATTR(bq_internal_temp),
+	POWER_SUPPLY_ATTR(bq_remaining_capacity),
 	/* Local extensions of type int64_t */
 	POWER_SUPPLY_ATTR(charge_counter_ext),
 	/* Properties of type `const char *' */
@@ -491,6 +499,10 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(manufacturer),
 	POWER_SUPPLY_ATTR(battery_type),
 	POWER_SUPPLY_ATTR(cycle_counts),
+	/* [TI FG ] Local extensions of TI fg read reg*/
+	POWER_SUPPLY_ATTR(manufacturer_info_a),
+	POWER_SUPPLY_ATTR(manufacturer_info_b),
+	POWER_SUPPLY_ATTR(manufacturer_info_c),
 	POWER_SUPPLY_ATTR(serial_number),
 };
 

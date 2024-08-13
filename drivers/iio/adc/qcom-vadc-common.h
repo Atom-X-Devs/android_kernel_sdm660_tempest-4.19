@@ -177,6 +177,8 @@ struct vadc_prescale_ratio {
  *	code.
  * SCALE_HW_CALIB_PM2250_S3_DIE_TEMP: Returns result in millidegrees for
  *	S3 die temperature channel on PM2250.
+ * SCALE_HW_CALIB_RBLT_100K_PULLUP: Returns battery lid touch resistance
+ *  in Ohms using 100k pullup.
  */
 enum vadc_scale_fn_type {
 	SCALE_DEFAULT = 0,
@@ -199,6 +201,7 @@ enum vadc_scale_fn_type {
 	SCALE_HW_CALIB_THERM_100K_PU_PM7,
 	SCALE_HW_CALIB_PMIC_THERM_PM7,
 	SCALE_BATT_THERM_QRD_215,
+	SCALE_HW_CALIB_RBLT_100K_PULLUP,
 	SCALE_HW_CALIB_MAX,
 };
 

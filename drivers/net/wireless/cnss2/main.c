@@ -1022,7 +1022,7 @@ void cnss_device_crashed(struct device *dev)
 }
 EXPORT_SYMBOL(cnss_device_crashed);
 
-static void cnss_subsys_crash_shutdown(const struct subsys_desc *subsys_desc)
+static void __maybe_unused cnss_subsys_crash_shutdown(const struct subsys_desc *subsys_desc)
 {
 	struct cnss_plat_data *plat_priv = dev_get_drvdata(subsys_desc->dev);
 
@@ -1776,7 +1776,6 @@ int cnss_register_subsys(struct cnss_plat_data *plat_priv)
 	subsys_info->subsys_desc.powerup = cnss_subsys_powerup;
 	subsys_info->subsys_desc.shutdown = cnss_subsys_shutdown;
 	subsys_info->subsys_desc.ramdump = cnss_subsys_ramdump;
-	subsys_info->subsys_desc.crash_shutdown = cnss_subsys_crash_shutdown;
 	subsys_info->subsys_desc.dev = &plat_priv->plat_dev->dev;
 
 	subsys_info->subsys_device = subsys_register(&subsys_info->subsys_desc);
@@ -2109,6 +2108,26 @@ static void cnss_unregister_ramdump_v1(struct cnss_plat_data *plat_priv)
 				  ramdump_info->ramdump_pa);
 }
 
+/**
+ * cnss_ignore_dump_data_reg_fail - Ignore Ramdump table register failure
+ * @ret: Error returned by msm_dump_data_register_nominidump
+ *
+ * If we dont have support for mem dump feature, ignore failure.
+ *
+ * Return: Same given error code if mem dump feature enabled, 0 otherwise
+ */
+#ifdef CONFIG_QCOM_MEMORY_DUMP_V2
+static int cnss_ignore_dump_data_reg_fail(int ret)
+{
+	return ret;
+}
+#else
+static int cnss_ignore_dump_data_reg_fail(int ret)
+{
+	return 0;
+}
+#endif
+
 static int cnss_register_ramdump_v2(struct cnss_plat_data *plat_priv)
 {
 	int ret = 0;
@@ -2143,7 +2162,9 @@ static int cnss_register_ramdump_v2(struct cnss_plat_data *plat_priv)
 	ret = msm_dump_data_register_nominidump(MSM_DUMP_TABLE_APPS,
 						&dump_entry);
 	if (ret) {
-		cnss_pr_err("Failed to setup dump table, err = %d\n", ret);
+		ret = cnss_ignore_dump_data_reg_fail(ret);
+		cnss_pr_err("Failed to setup dump table, %s (%d)\n",
+			    ret ? "Error" : "Ignoring", ret);
 		goto free_ramdump;
 	}
 

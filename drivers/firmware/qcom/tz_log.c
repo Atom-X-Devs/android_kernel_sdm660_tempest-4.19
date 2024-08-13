@@ -1241,8 +1241,7 @@ static ssize_t tzdbgfs_read(struct file *file, char __user *buf,
 	if (file->private_data)
 		tz_id = *(int *)(file->private_data);
 	else {
-		pr_err("%s: file data private null unable to proceed\n",
-			__func__);
+		pr_err("%s: TZ ID data null unable to proceed\n", __func__);
 		return 0;
 	}
 

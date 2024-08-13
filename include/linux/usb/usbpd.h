@@ -13,6 +13,7 @@ struct device;
 
 /* Standard IDs */
 #define USBPD_SID			0xff00
+#define DP_SID				0xff01
 
 /* Structured VDM Command Type */
 enum usbpd_svdm_cmd_type {
@@ -35,6 +36,7 @@ enum usbpd_svdm_cmd_type {
  */
 struct usbpd_svid_handler {
 	u16 svid;
+	u16 pid;
 
 	/* Notified when VDM session established/reset; must be implemented */
 	void (*connect)(struct usbpd_svid_handler *hdlr,
@@ -44,6 +46,10 @@ struct usbpd_svid_handler {
 	/* DP driver -> PE driver for requesting USB SS lanes */
 	int (*request_usb_ss_lane)(struct usbpd *pd,
 			struct usbpd_svid_handler *hdlr);
+
+	/* Extended Message */
+	void (*ext_msg_received)(struct usbpd_svid_handler *hdlr,
+			u8 msg_type, const u8 *data, size_t data_len);
 
 	/* Unstructured VDM */
 	void (*vdm_received)(struct usbpd_svid_handler *hdlr, u32 vdm_hdr,
@@ -79,6 +85,12 @@ struct usbpd *devm_usbpd_get_by_phandle(struct device *dev,
 int usbpd_register_svid(struct usbpd *pd, struct usbpd_svid_handler *hdlr);
 
 void usbpd_unregister_svid(struct usbpd *pd, struct usbpd_svid_handler *hdlr);
+
+/*
+ * Transmit an Extended Message.
+ */
+int usbpd_send_ext_msg(struct usbpd *pd, u8 msg_type,
+		const u8 *data, size_t data_len);
 
 /*
  * Transmit a VDM message.

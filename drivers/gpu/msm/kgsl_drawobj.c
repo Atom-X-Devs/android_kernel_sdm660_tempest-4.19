@@ -31,11 +31,10 @@
 #include "kgsl_trace.h"
 
 /*
- * Define an kmem cache for the memobj & sparseobj structures since we
+ * Define an kmem cache for the memobj structures since we
  * allocate and free them so frequently
  */
 static struct kmem_cache *memobjs_cache;
-static struct kmem_cache *sparseobjs_cache;
 
 static void syncobj_destroy_object(struct kgsl_drawobj *drawobj)
 {
@@ -71,16 +70,12 @@ static void timelineobj_destroy_object(struct kgsl_drawobj *drawobj)
 	kfree(TIMELINEOBJ(drawobj));
 }
 
-static void sparseobj_destroy_object(struct kgsl_drawobj *drawobj)
-{
-	kfree(SPARSEOBJ(drawobj));
-}
-
 void kgsl_drawobj_destroy_object(struct kref *kref)
 {
 	struct kgsl_drawobj *drawobj = container_of(kref,
 		struct kgsl_drawobj, refcount);
 
+	atomic_dec(&drawobj->context->refs_from_drawobj);
 	kgsl_context_put(drawobj->context);
 	drawobj->destroy_object(drawobj);
 }
@@ -260,29 +255,6 @@ static void drawobj_sync_func(struct kgsl_device *device,
 	kgsl_drawobj_put(&event->syncobj->base);
 }
 
-static inline void memobj_list_free(struct list_head *list)
-{
-	struct kgsl_memobj_node *mem, *tmpmem;
-
-	/* Free the cmd mem here */
-	list_for_each_entry_safe(mem, tmpmem, list, node) {
-		list_del_init(&mem->node);
-		kmem_cache_free(memobjs_cache, mem);
-	}
-}
-
-static void drawobj_destroy_sparse(struct kgsl_drawobj *drawobj)
-{
-	struct kgsl_sparseobj_node *mem, *tmpmem;
-	struct list_head *list = &SPARSEOBJ(drawobj)->sparselist;
-
-	/* Free the sparse mem here */
-	list_for_each_entry_safe(mem, tmpmem, list, node) {
-		list_del_init(&mem->node);
-		kmem_cache_free(sparseobjs_cache, mem);
-	}
-}
-
 static void drawobj_sync_timeline_fence_work(struct work_struct *work)
 {
 	struct kgsl_drawobj_sync_event *event = container_of(work,
@@ -379,6 +351,7 @@ static void timelineobj_destroy(struct kgsl_drawobj *drawobj)
 static void cmdobj_destroy(struct kgsl_drawobj *drawobj)
 {
 	struct kgsl_drawobj_cmd *cmdobj = CMDOBJ(drawobj);
+	struct kgsl_memobj_node *mem, *tmpmem;
 
 	/*
 	 * Release the refcount on the mem entry associated with the
@@ -387,11 +360,17 @@ static void cmdobj_destroy(struct kgsl_drawobj *drawobj)
 	if (cmdobj->base.flags & KGSL_DRAWOBJ_PROFILING)
 		kgsl_mem_entry_put(cmdobj->profiling_buf_entry);
 
-	/* Destroy the cmdlist we created */
-	memobj_list_free(&cmdobj->cmdlist);
+	/* Destroy the command list */
+	list_for_each_entry_safe(mem, tmpmem, &cmdobj->cmdlist, node) {
+		list_del_init(&mem->node);
+		kmem_cache_free(memobjs_cache, mem);
+	}
 
-	/* Destroy the memlist we created */
-	memobj_list_free(&cmdobj->memlist);
+	/* Destroy the memory list */
+	list_for_each_entry_safe(mem, tmpmem, &cmdobj->memlist, node) {
+		list_del_init(&mem->node);
+		kmem_cache_free(memobjs_cache, mem);
+	}
 
 	if (drawobj->type & CMDOBJ_TYPE)
 		atomic_dec(&drawobj->context->proc_priv->cmd_count);
@@ -414,7 +393,6 @@ void kgsl_drawobj_destroy(struct kgsl_drawobj *drawobj)
 
 	kgsl_drawobj_put(drawobj);
 }
-EXPORT_SYMBOL(kgsl_drawobj_destroy);
 
 static bool drawobj_sync_fence_func(void *priv)
 {
@@ -832,6 +810,8 @@ static int drawobj_init(struct kgsl_device *device,
 	if (!_kgsl_context_get(context))
 		return -ENOENT;
 
+	atomic_inc(&context->refs_from_drawobj);
+
 	kref_init(&drawobj->refcount);
 
 	drawobj->device = device;
@@ -924,40 +904,6 @@ err:
 	kvfree(timelineobj->timelines);
 	timelineobj->timelines = NULL;
 	return ret;
-}
-
-/**
- * kgsl_drawobj_sparse_create() - Create a new sparse obj structure
- * @device: Pointer to a KGSL device struct
- * @context: Pointer to a KGSL context struct
- * @flags: Flags for the sparse obj
- *
- * Allocate an new kgsl_drawobj_sparse structure
- */
-struct kgsl_drawobj_sparse *kgsl_drawobj_sparse_create(
-		struct kgsl_device *device,
-		struct kgsl_context *context, unsigned int flags)
-{
-	int ret;
-	struct kgsl_drawobj_sparse *sparseobj =
-			kzalloc(sizeof(*sparseobj), GFP_KERNEL);
-
-	if (!sparseobj)
-		return ERR_PTR(-ENOMEM);
-
-	ret = drawobj_init(device,
-		context, &sparseobj->base, SPARSEOBJ_TYPE);
-	if (ret) {
-		kfree(sparseobj);
-		return ERR_PTR(ret);
-	}
-
-	INIT_LIST_HEAD(&sparseobj->sparselist);
-
-	sparseobj->base.destroy = drawobj_destroy_sparse;
-	sparseobj->base.destroy_object = sparseobj_destroy_object;
-
-	return sparseobj;
 }
 
 /**
@@ -1219,62 +1165,6 @@ static int kgsl_drawobj_add_memobject(struct list_head *head,
 	return 0;
 }
 
-static int kgsl_drawobj_add_sparseobject(struct list_head *head,
-		struct kgsl_sparse_binding_object *obj, unsigned int virt_id)
-{
-	struct kgsl_sparseobj_node *mem;
-
-	mem = kmem_cache_alloc(sparseobjs_cache, GFP_KERNEL);
-	if (mem == NULL)
-		return -ENOMEM;
-
-	mem->virt_id = virt_id;
-	mem->obj.id = obj->id;
-	mem->obj.virtoffset = obj->virtoffset;
-	mem->obj.physoffset = obj->physoffset;
-	mem->obj.size = obj->size;
-	mem->obj.flags = obj->flags;
-
-	list_add_tail(&mem->node, head);
-	return 0;
-}
-
-int kgsl_drawobj_sparse_add_sparselist(struct kgsl_device *device,
-		struct kgsl_drawobj_sparse *sparseobj, unsigned int id,
-		void __user *ptr, unsigned int size, unsigned int count)
-{
-	struct kgsl_sparse_binding_object obj;
-	int i, ret = 0;
-
-	ret = _verify_input_list(count, ptr, size);
-	if (ret <= 0)
-		return ret;
-
-	for (i = 0; i < count; i++) {
-		memset(&obj, 0, sizeof(obj));
-
-		ret = kgsl_copy_from_user(&obj, ptr, sizeof(obj), size);
-		if (ret)
-			return ret;
-
-		if (!(obj.flags & (KGSL_SPARSE_BIND | KGSL_SPARSE_UNBIND)))
-			return -EINVAL;
-
-		ret = kgsl_drawobj_add_sparseobject(&sparseobj->sparselist,
-			&obj, id);
-		if (ret)
-			return ret;
-
-		ptr += sizeof(obj);
-	}
-
-	sparseobj->size = size;
-	sparseobj->count = count;
-
-	return 0;
-}
-
-
 #define CMDLIST_FLAGS \
 	(KGSL_CMDLIST_IB | \
 	 KGSL_CMDLIST_CTXTSWITCH_PREAMBLE | \
@@ -1445,15 +1335,13 @@ int kgsl_drawobj_sync_add_synclist(struct kgsl_device *device,
 void kgsl_drawobjs_cache_exit(void)
 {
 	kmem_cache_destroy(memobjs_cache);
-	kmem_cache_destroy(sparseobjs_cache);
 }
 
 int kgsl_drawobjs_cache_init(void)
 {
 	memobjs_cache = KMEM_CACHE(kgsl_memobj_node, 0);
-	sparseobjs_cache = KMEM_CACHE(kgsl_sparseobj_node, 0);
 
-	if (!memobjs_cache || !sparseobjs_cache)
+	if (!memobjs_cache)
 		return -ENOMEM;
 
 	return 0;

@@ -1005,6 +1005,30 @@ static int qcom_vadc_scale_hw_calib_volt(
 	return 0;
 }
 
+static int qcom_vadc_scale_hw_calib_rblt(
+				const struct vadc_prescale_ratio *prescale,
+				const struct adc_data *data,
+				u16 adc_code, int *result_mdec)
+{
+	s64 rblt = 0;
+
+	if (result_mdec == NULL)
+		return -EINVAL;
+
+	if (adc_code == 0)
+		return 0;
+	if (adc_code >= (data->full_scale_code_volt - 1))
+		adc_code = data->full_scale_code_volt - 2;
+
+	/* Solve for rblt with 100k pullup voltage divider */
+	rblt = div64_s64(data->full_scale_code_volt * 1000, (s64) adc_code);
+	rblt = div64_s64(100000000, rblt - 1000);
+
+	*result_mdec = rblt;
+
+	return 0;
+}
+
 static int qcom_vadc_scale_hw_calib_therm(
 				const struct vadc_prescale_ratio *prescale,
 				const struct adc_data *data,
@@ -1452,6 +1476,9 @@ int qcom_vadc_hw_scale(enum vadc_scale_fn_type scaletype,
 						adc_code, result);
 	case SCALE_HW_CALIB_PMIC_THERM_PM7:
 		return qcom_vadc7_scale_hw_calib_die_temp(prescale, data,
+						adc_code, result);
+	case SCALE_HW_CALIB_RBLT_100K_PULLUP:
+		return qcom_vadc_scale_hw_calib_rblt(prescale, data,
 						adc_code, result);
 	default:
 		return -EINVAL;

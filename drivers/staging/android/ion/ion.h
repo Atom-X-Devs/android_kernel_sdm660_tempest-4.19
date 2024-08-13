@@ -16,6 +16,7 @@
 #include <linux/mm_types.h>
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
+#include <linux/proc_fs.h>
 #include <linux/sched.h>
 #include <linux/kthread.h>
 #include <linux/shrinker.h>
@@ -133,6 +134,7 @@ struct ion_buffer {
 	};
 	struct ion_device *dev;
 	struct ion_heap *heap;
+	struct dma_buf *dmabuf;
 	unsigned long flags;
 	unsigned long private_flags;
 	size_t size;
@@ -141,6 +143,7 @@ struct ion_buffer {
 	struct mutex lock;
 	int kmap_cnt;
 	void *vaddr;
+	struct kref kref;
 	struct sg_table *sg_table;
 	struct list_head attachments;
 	struct list_head vmas;
@@ -163,6 +166,7 @@ struct ion_device {
 	struct rw_semaphore lock;
 	struct plist_head heaps;
 	struct dentry *debug_root;
+	struct proc_dir_entry *proc_ion_root;
 	int heap_cnt;
 };
 

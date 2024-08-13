@@ -35,6 +35,7 @@ config SND_SOC_ALL_CODECS
 	select SND_SOC_ADAU7002
 	select SND_SOC_ADS117X
 	select SND_SOC_AK4104 if SPI_MASTER
+	select SND_SOC_AK4331 if I2C
 	select SND_SOC_AK4458 if I2C
 	select SND_SOC_AK4535 if I2C
 	select SND_SOC_AK4554
@@ -48,6 +49,10 @@ config SND_SOC_ALL_CODECS
 	select SND_SOC_ALC5632 if I2C
 	select SND_SOC_BT_SCO
 	select SND_SOC_BD28623
+	select SND_SOC_CM710X if I2C
+	select SND_SOC_CM710X_SPI if SPI_MASTER
+	select SND_SOC_CM7120 if I2C
+	select SND_SOC_CM7120_SPI if SPI_MASTER
 	select SND_SOC_CQ0093VC
 	select SND_SOC_CS35L32 if I2C
 	select SND_SOC_CS35L33 if I2C
@@ -388,6 +393,10 @@ config SND_SOC_AK4104
 	tristate "AKM AK4104 CODEC"
 	depends on SPI_MASTER
 
+config SND_SOC_AK4331
+	tristate "AKM AK4331 CODEC"
+	depends on I2C
+
 config SND_SOC_AK4458
 	tristate "AKM AK4458 CODEC"
 	depends on I2C
@@ -437,6 +446,23 @@ config SND_SOC_BD28623
 
 config SND_SOC_BT_SCO
 	tristate "Dummy BT SCO codec driver"
+
+config SND_SOC_CM710X
+	tristate "Cmedia CM710X CODEC"
+	depends on I2C
+
+config SND_SOC_CM710X_SPI
+	tristate "C-Media CM710X SPI CODEC"
+	depends on SPI_MASTER
+	default y
+
+config SND_SOC_CM7120
+	tristate "Cmedia CM7120 CODEC"
+	depends on I2C
+
+config SND_SOC_CM7120_SPI
+	tristate "C-Media CM7120 SPI CODEC"
+	depends on SPI_MASTER
 
 config SND_SOC_CPCAP
 	tristate "Motorola CPCAP codec"

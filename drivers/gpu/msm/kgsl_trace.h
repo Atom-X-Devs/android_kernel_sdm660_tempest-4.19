@@ -811,6 +811,199 @@ TRACE_EVENT(kgsl_constraint,
 	)
 );
 
+TRACE_EVENT(kgsl_iommu_fetch_ptep,
+
+	TP_PROTO(unsigned long gpuaddr, unsigned long offset, void *ptep,
+			void *pptep, int status, unsigned long duration),
+
+	TP_ARGS(gpuaddr, offset, ptep, pptep, status, duration),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, gpuaddr)
+		__field(unsigned long, offset)
+		__field(void *, ptep)
+		__field(void *, pptep)
+		__field(int, status)
+		__field(unsigned long, duration)
+	),
+
+	TP_fast_assign(
+		__entry->gpuaddr = gpuaddr;
+		__entry->offset = offset;
+		__entry->ptep = ptep;
+		__entry->pptep = pptep;
+		__entry->status = status;
+		__entry->duration = duration;
+	),
+
+	TP_printk(
+		"iova=0x%016lx+%lx -> ptep=%pK pptep=%pK : status=%d duration_ns=%lu",
+		__entry->gpuaddr, __entry->offset, __entry->ptep,
+		__entry->pptep, __entry->status, __entry->duration
+	)
+);
+
+TRACE_EVENT(kgsl_iommu_decode_ptep,
+
+	TP_PROTO(void *ptep, long pfn, int prot, int status,
+			unsigned long duration),
+
+	TP_ARGS(ptep, pfn, prot, status, duration),
+
+	TP_STRUCT__entry(
+		__field(void *, ptep)
+		__field(long, pfn)
+		__field(int, prot)
+		__field(int, status)
+		__field(unsigned long, duration)
+	),
+
+	TP_fast_assign(
+		__entry->ptep = ptep;
+		__entry->pfn = pfn;
+		__entry->prot = prot;
+		__entry->status = status;
+		__entry->duration = duration;
+	),
+
+	TP_printk(
+		"ptep=%pK -> pfn=%ld prot=0x%x : status=%d duration_ns=%lu",
+		__entry->ptep, __entry->pfn, __entry->prot, __entry->status,
+		__entry->duration
+	)
+);
+
+TRACE_EVENT(kgsl_iommu_remap_ptep,
+
+	TP_PROTO(long pfn, int prot, unsigned long gpuaddr,
+			unsigned long offset, void *ptep, void *pptep,
+			int status, unsigned long duration),
+
+	TP_ARGS(pfn, prot, gpuaddr, offset, ptep, pptep, status, duration),
+
+	TP_STRUCT__entry(
+		__field(long, pfn)
+		__field(int, prot)
+		__field(unsigned long, gpuaddr)
+		__field(unsigned long, offset)
+		__field(void *, ptep)
+		__field(void *, pptep)
+		__field(int, status)
+		__field(unsigned long, duration)
+	),
+
+	TP_fast_assign(
+		__entry->pfn = pfn;
+		__entry->prot = prot;
+		__entry->gpuaddr = gpuaddr;
+		__entry->offset = offset;
+		__entry->ptep = ptep;
+		__entry->pptep = pptep;
+		__entry->status = status;
+		__entry->duration = duration;
+	),
+
+	TP_printk(
+		"pfn=%ld prot=0x%x -> iova=0x%lx+%lx ptep=%pK pptep=%pK : status=%d duration_ns=%lu",
+		__entry->pfn, __entry->prot, __entry->gpuaddr, __entry->offset,
+		__entry->ptep, __entry->pptep, __entry->status,
+		__entry->duration
+	)
+);
+
+DECLARE_EVENT_CLASS(lazy_fault_template,
+	TP_PROTO(long pfn, int prot, unsigned long iova, void *ptep,
+			void *pptep, int status,
+			unsigned long search_duration,
+			unsigned long handling_duration),
+	TP_ARGS(pfn, prot, iova, ptep, pptep, status, search_duration,
+			handling_duration),
+	TP_STRUCT__entry(
+		__field(long, pfn)
+		__field(int, prot)
+		__field(unsigned long, iova)
+		__field(void *, ptep)
+		__field(void *, pptep)
+		__field(int, status)
+		__field(unsigned long, search_duration)
+		__field(unsigned long, handling_duration)
+	),
+	TP_fast_assign(
+		__entry->pfn = pfn;
+		__entry->prot = prot;
+		__entry->iova = iova;
+		__entry->ptep = ptep;
+		__entry->pptep = pptep;
+		__entry->status = status;
+		__entry->search_duration = search_duration;
+		__entry->handling_duration = handling_duration;
+	),
+	TP_printk(
+		"pfn=%ld prot=0x%x -> iova=0x%lx ptep=%pK pptep=%pK : status=%d search_ns=%lu handling_ns=%lu",
+		__entry->pfn, __entry->prot, __entry->iova, __entry->ptep,
+		__entry->pptep, __entry->status, __entry->search_duration,
+		__entry->handling_duration
+	)
+);
+
+DEFINE_EVENT(lazy_fault_template, kgsl_lazy_cpu_fault,
+	TP_PROTO(long pfn, int prot, unsigned long iova, void *ptep,
+			void *pptep, int status,
+			unsigned long search_duration,
+			unsigned long handling_duration),
+	TP_ARGS(pfn, prot, iova, ptep, pptep, status, search_duration,
+			handling_duration)
+);
+
+DEFINE_EVENT(lazy_fault_template, kgsl_lazy_gpu_fault,
+	TP_PROTO(long pfn, int prot, unsigned long iova, void *ptep,
+			void *pptep, int status,
+			unsigned long search_duration,
+			unsigned long handling_duration),
+	TP_ARGS(pfn, prot, iova, ptep, pptep, status, search_duration,
+			handling_duration)
+);
+
+TRACE_EVENT(kgsl_alloc_lazy_page,
+
+	TP_PROTO(long pfn, int prot, unsigned long gpuaddr,
+			unsigned long offset, void *ptep, void *pptep,
+			unsigned long alloc_duration,
+			unsigned long remap_duration),
+
+	TP_ARGS(pfn, prot, gpuaddr, offset, ptep, pptep, alloc_duration,
+			remap_duration),
+
+	TP_STRUCT__entry(
+		__field(long, pfn)
+		__field(int, prot)
+		__field(unsigned long, gpuaddr)
+		__field(unsigned long, offset)
+		__field(void *, ptep)
+		__field(void *, pptep)
+		__field(unsigned long, alloc_duration)
+		__field(unsigned long, remap_duration)
+	),
+
+	TP_fast_assign(
+		__entry->pfn = pfn;
+		__entry->prot = prot;
+		__entry->gpuaddr = gpuaddr;
+		__entry->offset = offset;
+		__entry->ptep = ptep;
+		__entry->pptep = pptep;
+		__entry->alloc_duration = alloc_duration;
+		__entry->remap_duration = remap_duration;
+	),
+
+	TP_printk(
+		"pfn=%ld prot=0x%x -> iova=0x%lx+%lx ptep=%pK pptep=%pK : alloc_ns=%lu remap_ns=%lu",
+		__entry->pfn, __entry->prot, __entry->gpuaddr,
+		__entry->offset, __entry->ptep, __entry->pptep,
+		__entry->alloc_duration, __entry->remap_duration
+	)
+);
+
 TRACE_EVENT(kgsl_mmu_pagefault,
 
 	TP_PROTO(struct kgsl_device *device, unsigned long page,
@@ -1091,101 +1284,6 @@ TRACE_EVENT(kgsl_msg,
 		"%s", __get_str(msg)
 	)
 );
-
-DECLARE_EVENT_CLASS(sparse_alloc_template,
-	TP_PROTO(unsigned int id, uint64_t size, unsigned int pagesize),
-	TP_ARGS(id, size, pagesize),
-	TP_STRUCT__entry(
-		__field(unsigned int, id)
-		__field(uint64_t, size)
-		__field(unsigned int, pagesize)
-	),
-	TP_fast_assign(
-		__entry->id = id;
-		__entry->size = size;
-		__entry->pagesize = pagesize;
-	),
-	TP_printk("id=%d size=0x%llX pagesize=0x%X",
-		__entry->id, __entry->size, __entry->pagesize)
-);
-
-DEFINE_EVENT(sparse_alloc_template, sparse_phys_alloc,
-	TP_PROTO(unsigned int id, uint64_t size, unsigned int pagesize),
-	TP_ARGS(id, size, pagesize)
-);
-
-DEFINE_EVENT(sparse_alloc_template, sparse_virt_alloc,
-	TP_PROTO(unsigned int id, uint64_t size, unsigned int pagesize),
-	TP_ARGS(id, size, pagesize)
-);
-
-DECLARE_EVENT_CLASS(sparse_free_template,
-	TP_PROTO(unsigned int id),
-	TP_ARGS(id),
-	TP_STRUCT__entry(
-		__field(unsigned int, id)
-	),
-	TP_fast_assign(
-		__entry->id = id;
-	),
-	TP_printk("id=%d", __entry->id)
-);
-
-DEFINE_EVENT(sparse_free_template, sparse_phys_free,
-	TP_PROTO(unsigned int id),
-	TP_ARGS(id)
-);
-
-DEFINE_EVENT(sparse_free_template, sparse_virt_free,
-	TP_PROTO(unsigned int id),
-	TP_ARGS(id)
-);
-
-TRACE_EVENT(sparse_bind,
-	TP_PROTO(unsigned int v_id, uint64_t v_off,
-		unsigned int p_id, uint64_t p_off,
-		uint64_t size, uint64_t flags),
-	TP_ARGS(v_id, v_off, p_id, p_off, size, flags),
-	TP_STRUCT__entry(
-		__field(unsigned int, v_id)
-		__field(uint64_t, v_off)
-		__field(unsigned int, p_id)
-		__field(uint64_t, p_off)
-		__field(uint64_t, size)
-		__field(uint64_t, flags)
-	),
-	TP_fast_assign(
-		__entry->v_id = v_id;
-		__entry->v_off = v_off;
-		__entry->p_id = p_id;
-		__entry->p_off = p_off;
-		__entry->size = size;
-		__entry->flags = flags;
-	),
-	TP_printk(
-	"v_id=%d v_off=0x%llX p_id=%d p_off=0x%llX size=0x%llX flags=0x%llX",
-		__entry->v_id, __entry->v_off,
-		__entry->p_id, __entry->p_off,
-		__entry->size, __entry->flags)
-);
-
-TRACE_EVENT(sparse_unbind,
-	TP_PROTO(unsigned int v_id, uint64_t v_off, uint64_t size),
-	TP_ARGS(v_id, v_off, size),
-	TP_STRUCT__entry(
-		__field(unsigned int, v_id)
-		__field(uint64_t, v_off)
-		__field(uint64_t, size)
-	),
-	TP_fast_assign(
-		__entry->v_id = v_id;
-		__entry->v_off = v_off;
-		__entry->size = size;
-	),
-	TP_printk("v_id=%d v_off=0x%llX size=0x%llX",
-		__entry->v_id, __entry->v_off, __entry->size)
-);
-
 
 TRACE_EVENT(kgsl_clock_throttling,
 	TP_PROTO(

@@ -36,6 +36,11 @@ struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 		return ERR_PTR(-EINVAL);
 	}
 
+	if (map_value_has_spin_lock(inner_map)) {
+		fdput(f);
+		return ERR_PTR(-ENOTSUPP);
+	}
+
 	inner_map_meta_size = sizeof(*inner_map_meta);
 	/* In some cases verifier needs to access beyond just base map. */
 	if (inner_map->ops == &array_map_ops)
@@ -94,7 +99,7 @@ void *bpf_map_fd_get_ptr(struct bpf_map *map,
 		return inner_map;
 
 	if (bpf_map_meta_equal(map->inner_map_meta, inner_map))
-		inner_map = bpf_map_inc(inner_map, false);
+		bpf_map_inc(inner_map);
 	else
 		inner_map = ERR_PTR(-EINVAL);
 

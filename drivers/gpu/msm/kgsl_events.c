@@ -41,6 +41,8 @@ static void _kgsl_event_worker(struct work_struct *work)
 
 	event->func(event->device, event->group, event->priv, event->result);
 
+	if (event->context)
+		atomic_dec(&event->context->refs_from_event);
 	kgsl_context_put(event->context);
 	kmem_cache_free(events_cache, event);
 }
@@ -115,7 +117,6 @@ void kgsl_process_event_group(struct kgsl_device *device,
 {
 	_process_event_group(device, group, false);
 }
-EXPORT_SYMBOL(kgsl_process_event_group);
 
 /**
  * kgsl_flush_event_group() - flush all the events in a group by retiring the
@@ -128,7 +129,6 @@ void kgsl_flush_event_group(struct kgsl_device *device,
 {
 	_process_event_group(device, group, true);
 }
-EXPORT_SYMBOL(kgsl_flush_event_group);
 
 /**
  * kgsl_cancel_events_timestamp() - Cancel pending events for a given timestamp
@@ -150,7 +150,6 @@ void kgsl_cancel_events_timestamp(struct kgsl_device *device,
 
 	spin_unlock(&group->lock);
 }
-EXPORT_SYMBOL(kgsl_cancel_events_timestamp);
 
 /**
  * kgsl_cancel_events() - Cancel all pending events in the group
@@ -169,7 +168,6 @@ void kgsl_cancel_events(struct kgsl_device *device,
 
 	spin_unlock(&group->lock);
 }
-EXPORT_SYMBOL(kgsl_cancel_events);
 
 /**
  * kgsl_cancel_event() - Cancel a specific event from a group
@@ -195,7 +193,6 @@ void kgsl_cancel_event(struct kgsl_device *device,
 
 	spin_unlock(&group->lock);
 }
-EXPORT_SYMBOL(kgsl_cancel_event);
 
 /**
  * kgsl_event_pending() - Searches for an event in an event group
@@ -265,6 +262,9 @@ int kgsl_add_event(struct kgsl_device *device, struct kgsl_event_group *group,
 		return -ENOENT;
 	}
 
+	if (context)
+		atomic_inc(&context->refs_from_event);
+
 	event->device = device;
 	event->context = context;
 	event->timestamp = timestamp;
@@ -300,7 +300,6 @@ int kgsl_add_event(struct kgsl_device *device, struct kgsl_event_group *group,
 
 	return 0;
 }
-EXPORT_SYMBOL(kgsl_add_event);
 
 static DEFINE_RWLOCK(group_lock);
 static LIST_HEAD(group_list);
@@ -314,7 +313,6 @@ void kgsl_process_event_groups(struct kgsl_device *device)
 		_process_event_group(device, group, false);
 	read_unlock(&group_lock);
 }
-EXPORT_SYMBOL(kgsl_process_event_groups);
 
 /**
  * kgsl_del_event_group() - Remove a GPU event group
@@ -329,7 +327,6 @@ void kgsl_del_event_group(struct kgsl_event_group *group)
 	list_del(&group->group);
 	write_unlock(&group_lock);
 }
-EXPORT_SYMBOL(kgsl_del_event_group);
 
 /**
  * kgsl_add_event_group() - Add a new GPU event group
@@ -366,7 +363,6 @@ void kgsl_add_event_group(struct kgsl_event_group *group,
 	list_add_tail(&group->group, &group_list);
 	write_unlock(&group_lock);
 }
-EXPORT_SYMBOL(kgsl_add_event_group);
 
 static void events_debugfs_print_group(struct seq_file *s,
 		struct kgsl_event_group *group)

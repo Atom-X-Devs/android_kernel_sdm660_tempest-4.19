@@ -62,7 +62,7 @@ static void scm_disable_sdi(void);
  * There is no API from TZ to re-enable the registers.
  * So the SDI cannot be re-enabled when it already by-passed.
  */
-static int download_mode = 1;
+static int download_mode = 0;
 static struct kobject dload_kobj;
 
 static int in_panic;
@@ -467,6 +467,7 @@ static void halt_spmi_pmic_arbiter(void)
 static void msm_restart_prepare(const char *cmd)
 {
 	bool need_warm_reset = false;
+	bool in_thermal_restart;
 	/* Write download mode flags if we're panic'ing
 	 * Write download mode flags if restart_mode says so
 	 * Kill download mode if master-kill switch is set
@@ -489,13 +490,23 @@ static void msm_restart_prepare(const char *cmd)
 	if (force_warm_reboot)
 		pr_info("Forcing a warm reset of the system\n");
 
+	in_thermal_restart = (cmd != NULL && cmd[0] != '\0') &&
+			!strcmp(cmd, "shutdown,thermal");
+
+#ifdef CONFIG_PSTORE_RAM
+	if (in_panic || in_thermal_restart)
+		need_warm_reset = true;
+#endif
+
 	/* Hard reset the PMIC unless memory contents must be maintained. */
 	if (force_warm_reboot || need_warm_reset)
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
 	else
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_HARD_RESET);
 
-	if (cmd != NULL) {
+	if (in_panic) {
+		qpnp_pon_set_restart_reason(PON_RESTART_REASON_KERNEL_PANIC);
+	} else if (cmd != NULL) {
 		if (!strncmp(cmd, "bootloader", 10)) {
 			qpnp_pon_set_restart_reason(
 				PON_RESTART_REASON_BOOTLOADER);
@@ -520,6 +531,18 @@ static void msm_restart_prepare(const char *cmd)
 			qpnp_pon_set_restart_reason(
 				PON_RESTART_REASON_KEYS_CLEAR);
 			__raw_writel(0x7766550a, restart_reason);
+		} else if (!strcmp(cmd, "upgrade")) {
+			qpnp_pon_set_restart_reason(
+					PON_RESTART_REASON_UPGRADE);
+			__raw_writel(0x6f656d00, restart_reason);
+		} else if (!strcmp(cmd, "silent-boot")) {
+			qpnp_pon_set_restart_reason(
+					PON_RESTART_REASON_SILENT_BOOT);
+			__raw_writel(0x6f656d00, restart_reason);
+		} else if (in_thermal_restart) {
+			qpnp_pon_set_restart_reason(
+					PON_RESTART_REASON_SHUTDOWN_THERMAL);
+			__raw_writel(0x7766550b, restart_reason);
 		} else if (!strncmp(cmd, "oem-", 4)) {
 			unsigned long code;
 			int ret;
@@ -530,6 +553,10 @@ static void msm_restart_prepare(const char *cmd)
 					     restart_reason);
 		} else if (!strncmp(cmd, "edl", 3)) {
 			enable_emergency_dload_mode();
+		} else if (!strncmp(cmd, "mdm_reboot", 10)) {
+			qpnp_pon_set_restart_reason(
+			PON_RESTART_REASON_MDM_REBOOT);
+			__raw_writel(0x77665600, restart_reason);
 		} else {
 			__raw_writel(0x77665501, restart_reason);
 		}

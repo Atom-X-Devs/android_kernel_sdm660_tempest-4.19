@@ -141,6 +141,7 @@
 #define PCIE20_AER_ERR_SRC_ID_REG (0x134)
 
 #define PCIE20_L1SUB_CONTROL1_REG (0x204)
+#define PCIE20_L1SUB_CONTROL2_REG (0x208)
 #define PCIE20_TX_P_FC_CREDIT_STATUS_OFF (0x730)
 #define PCIE20_TX_NP_FC_CREDIT_STATUS_OFF (0x734)
 #define PCIE20_TX_CPL_FC_CREDIT_STATUS_OFF (0x738)
@@ -165,6 +166,8 @@
 #define PHY_STABILIZATION_DELAY_US_MAX (1005)
 
 #define MSM_PCIE_CRC8_POLYNOMIAL (BIT(2) | BIT(1) | BIT(0))
+#define T_POWER_ON_VALUE (BIT(7) | BIT(6) | BIT(5) | BIT(4) | BIT(3))
+#define T_POWER_ON_SCALE (BIT(1) | BIT(0))
 
 #define GEN1_SPEED (0x1)
 #define GEN2_SPEED (0x2)
@@ -193,10 +196,10 @@
 #define MSM_PCIE_MAX_VREG (4)
 #define MSM_PCIE_MAX_CLK (14)
 #define MSM_PCIE_MAX_PIPE_CLK (1)
-#define MAX_RC_NUM (3)
-#define MAX_DEVICE_NUM (20)
+#define MAX_RC_NUM (CONFIG_PCI_MSM_MAX_RCS)
+#define MAX_DEVICE_NUM (CONFIG_PCI_MSM_MAX_DEVICES_PER_RC)
 #define PCIE_TLP_RD_SIZE (0x5)
-#define PCIE_LOG_PAGES (50)
+#define PCIE_LOG_PAGES (5)
 #define PCIE_CONF_SPACE_DW (1024)
 #define PCIE_CLEAR (0xdeadbeef)
 #define PCIE_LINK_DOWN (0xffffffff)
@@ -767,6 +770,8 @@ struct msm_pcie_dev_t {
 	uint32_t l1_2_th_value;
 	bool common_clk_en;
 	bool clk_power_manage_en;
+	uint32_t l1ss_t_power_on_value;
+	uint32_t l1ss_t_power_on_scale;
 	bool aux_clk_sync;
 	bool aer_enable;
 	uint32_t smmu_sid_base;
@@ -951,6 +956,7 @@ msm_pcie_reset_info[MAX_RC_NUM][MSM_PCIE_MAX_RESET] = {
 		{NULL, "pcie_phy_nocsr_com_phy_reset", false},
 		{NULL, "pcie_0_phy_reset", false}
 	},
+#if MAX_RC_NUM > 1
 	{
 		{NULL, "pcie_1_core_reset", false},
 		{NULL, "pcie_phy_reset", false},
@@ -958,6 +964,7 @@ msm_pcie_reset_info[MAX_RC_NUM][MSM_PCIE_MAX_RESET] = {
 		{NULL, "pcie_phy_nocsr_com_phy_reset", false},
 		{NULL, "pcie_1_phy_reset", false}
 	},
+#if MAX_RC_NUM > 2
 	{
 		{NULL, "pcie_2_core_reset", false},
 		{NULL, "pcie_phy_reset", false},
@@ -965,6 +972,8 @@ msm_pcie_reset_info[MAX_RC_NUM][MSM_PCIE_MAX_RESET] = {
 		{NULL, "pcie_phy_nocsr_com_phy_reset", false},
 		{NULL, "pcie_2_phy_reset", false}
 	}
+#endif
+#endif
 };
 
 /* pipe reset  */
@@ -973,12 +982,16 @@ msm_pcie_pipe_reset_info[MAX_RC_NUM][MSM_PCIE_MAX_PIPE_RESET] = {
 	{
 		{NULL, "pcie_0_phy_pipe_reset", false}
 	},
+#if MAX_RC_NUM > 1
 	{
 		{NULL, "pcie_1_phy_pipe_reset", false}
 	},
+#if MAX_RC_NUM > 2
 	{
 		{NULL, "pcie_2_phy_pipe_reset", false}
 	}
+#endif
+#endif
 };
 
 /* linkdown recovery resets  */
@@ -988,14 +1001,18 @@ msm_pcie_linkdown_reset_info[MAX_RC_NUM][MSM_PCIE_MAX_LINKDOWN_RESET] = {
 		{NULL, "pcie_0_link_down_reset", false},
 		{NULL, "pcie_0_phy_nocsr_com_phy_reset", false},
 	},
+#if MAX_RC_NUM > 1
 	{
 		{NULL, "pcie_1_link_down_reset", false},
 		{NULL, "pcie_1_phy_nocsr_com_phy_reset", false},
 	},
+#if MAX_RC_NUM > 2
 	{
 		{NULL, "pcie_2_link_down_reset", false},
 		{NULL, "pcie_2_phy_nocsr_com_phy_reset", false},
 	}
+#endif
+#endif
 };
 
 /* clocks */
@@ -1017,6 +1034,7 @@ static struct msm_pcie_clk_info_t
 	{NULL, "pcie_phy_cfg_ahb_clk", 0, false, false, false},
 	{NULL, "pcie_phy_aux_clk", 0, false, false, false}
 	},
+#if MAX_RC_NUM > 1
 	{
 	{NULL, "pcie_1_ref_clk_src", 0, false, false, false},
 	{NULL, "pcie_1_aux_clk", 1010000, false, true, false},
@@ -1033,6 +1051,7 @@ static struct msm_pcie_clk_info_t
 	{NULL, "pcie_phy_cfg_ahb_clk", 0, false, false, false},
 	{NULL, "pcie_phy_aux_clk", 0, false, false, false}
 	},
+#if MAX_RC_NUM > 2
 	{
 	{NULL, "pcie_2_ref_clk_src", 0, false, false, false},
 	{NULL, "pcie_2_aux_clk", 1010000, false, true, false},
@@ -1049,6 +1068,8 @@ static struct msm_pcie_clk_info_t
 	{NULL, "pcie_phy_cfg_ahb_clk", 0, false, false, false},
 	{NULL, "pcie_phy_aux_clk", 0, false, false, false}
 	}
+#endif
+#endif
 };
 
 /* Pipe Clocks */
@@ -1057,12 +1078,16 @@ static struct msm_pcie_clk_info_t
 	{
 	{NULL, "pcie_0_pipe_clk", 125000000, true, true, false},
 	},
+#if MAX_RC_NUM > 1
 	{
 	{NULL, "pcie_1_pipe_clk", 125000000, true, true, false},
 	},
+#if MAX_RC_NUM > 2
 	{
 	{NULL, "pcie_2_pipe_clk", 125000000, true, true, false},
 	}
+#endif
+#endif
 };
 
 /* resources */
@@ -4471,6 +4496,15 @@ static int msm_pcie_link_train(struct msm_pcie_dev_t *dev)
 		}
 	}
 
+	if (dev->l1ss_t_power_on_scale) {
+		msm_pcie_write_reg_field(dev->dm_core, PCIE20_L1SUB_CONTROL2_REG,
+				T_POWER_ON_SCALE, dev->l1ss_t_power_on_scale);
+	}
+	if (dev->l1ss_t_power_on_value) {
+		msm_pcie_write_reg_field(dev->dm_core, PCIE20_L1SUB_CONTROL2_REG,
+				T_POWER_ON_VALUE, dev->l1ss_t_power_on_value);
+	}
+
 	return 0;
 }
 
@@ -6272,6 +6306,16 @@ static int msm_pcie_probe(struct platform_device *pdev)
 	PCIE_DBG(pcie_dev, "Clock power management is %s enabled.\n",
 		pcie_dev->clk_power_manage_en ? "" : "not");
 
+	of_property_read_u32(of_node,
+				"qcom,l1ss-t-power-on-scale", &pcie_dev->l1ss_t_power_on_scale);
+	PCIE_DBG(pcie_dev, "l1ss Tpoweron scale update is %s enabled.\n",
+		pcie_dev->l1ss_t_power_on_scale ? "" : "not");
+
+	of_property_read_u32(of_node,
+				"qcom,l1ss-t-power-on-value", &pcie_dev->l1ss_t_power_on_value);
+	PCIE_DBG(pcie_dev, "l1ss Tpoweron value update is %s enabled.\n",
+		pcie_dev->l1ss_t_power_on_value ? "" : "not");
+
 	pcie_dev->aux_clk_sync = !of_property_read_bool(of_node,
 				"qcom,no-aux-clk-sync");
 	PCIE_DBG(pcie_dev, "AUX clock is %s synchronous to Core clock.\n",
@@ -7755,6 +7799,13 @@ int msm_pcie_pm_control(enum msm_pcie_pm_opt pm_opt, u32 busnr, void *user,
 			break;
 		}
 
+		if (!dev) {
+			PCIE_ERR(&msm_pcie_dev[rc_idx],
+				"PCIe: RC%d: requested to suspend when device isn't enumerated.\n",
+				rc_idx);
+			break;
+		}
+
 		if (msm_pcie_dev[rc_idx].pending_ep_reg) {
 			PCIE_DBG(&msm_pcie_dev[rc_idx],
 				"PCIe: RC%d: request to suspend the link is rejected\n",
@@ -7797,6 +7848,13 @@ int msm_pcie_pm_control(enum msm_pcie_pm_opt pm_opt, u32 busnr, void *user,
 			PCIE_ERR(&msm_pcie_dev[rc_idx],
 				"PCIe: RC%d: requested to resume when link is already powered on. Number of active EP(s): %d\n",
 				rc_idx, msm_pcie_dev[rc_idx].num_active_ep);
+			break;
+		}
+
+		if (!dev) {
+			PCIE_ERR(&msm_pcie_dev[rc_idx],
+				"PCIe: RC%d: requested to resume when device isn't enumerated.\n",
+				rc_idx);
 			break;
 		}
 

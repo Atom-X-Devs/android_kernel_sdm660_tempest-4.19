@@ -5,6 +5,7 @@
 #ifndef __KGSL_SHAREDMEM_H
 #define __KGSL_SHAREDMEM_H
 
+#include <linux/bitfield.h>
 #include <linux/dma-mapping.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
@@ -19,41 +20,14 @@ struct kgsl_process_private;
 #define KGSL_CACHE_OP_FLUSH     0x02
 #define KGSL_CACHE_OP_CLEAN     0x03
 
-int kgsl_sharedmem_alloc_contig(struct kgsl_device *device,
-			struct kgsl_memdesc *memdesc,
-			uint64_t size);
-
 void kgsl_sharedmem_free(struct kgsl_memdesc *memdesc);
-
-int kgsl_sharedmem_readl(const struct kgsl_memdesc *memdesc,
-			uint32_t *dst,
-			uint64_t offsetbytes);
-
-int kgsl_sharedmem_writel(struct kgsl_device *device,
-			const struct kgsl_memdesc *memdesc,
-			uint64_t offsetbytes,
-			uint32_t src);
-
-int kgsl_sharedmem_readq(const struct kgsl_memdesc *memdesc,
-			uint64_t *dst,
-			uint64_t offsetbytes);
-
-int kgsl_sharedmem_writeq(struct kgsl_device *device,
-			const struct kgsl_memdesc *memdesc,
-			uint64_t offsetbytes,
-			uint64_t src);
-
-int kgsl_sharedmem_set(struct kgsl_device *device,
-			const struct kgsl_memdesc *memdesc,
-			uint64_t offsetbytes, unsigned int value,
-			uint64_t sizebytes);
 
 int kgsl_cache_range_op(struct kgsl_memdesc *memdesc,
 			uint64_t offset, uint64_t size,
 			unsigned int op);
 
-void kgsl_memdesc_init(struct kgsl_device *device,
-			struct kgsl_memdesc *memdesc, uint64_t flags);
+void kgsl_memdesc_init(struct kgsl_device *device, struct kgsl_memdesc *memdesc,
+		uint64_t flags, uint32_t priv);
 
 void kgsl_process_init_sysfs(struct kgsl_device *device,
 		struct kgsl_process_private *private);
@@ -62,43 +36,119 @@ void kgsl_process_uninit_sysfs(struct kgsl_process_private *private);
 int kgsl_sharedmem_init_sysfs(void);
 void kgsl_sharedmem_uninit_sysfs(void);
 
-int kgsl_allocate_user(struct kgsl_device *device,
-		struct kgsl_memdesc *memdesc,
-		uint64_t size, uint64_t flags);
-
 void kgsl_get_memory_usage(char *str, size_t len, uint64_t memflags);
-
-int kgsl_sharedmem_page_alloc_user(struct kgsl_memdesc *memdesc,
-				uint64_t size);
 
 void kgsl_free_secure_page(struct page *page);
 
 struct page *kgsl_alloc_secure_page(void);
 
-/**
- * kgsl_free_pages() - Free pages in the pages array
- * @memdesc: memdesc that has the array to be freed
- *
- * Free the pages in the pages array of memdesc. If pool
- * is configured, pages are added back to the pool.
- * If shmem is used for allocation, kgsl refcount on the page
- * is decremented.
- */
-void kgsl_free_pages(struct kgsl_memdesc *memdesc);
+int kgsl_lock_page(struct page *page);
+int kgsl_unlock_page(struct page *page);
 
 /**
- * kgsl_free_pages_from_sgt() - Free scatter-gather list
- * @memdesc: pointer of the memdesc which has the sgt to be freed
+ * kgsl_allocate_user - Allocate user visible GPU memory
+ * @device: A GPU device handle
+ * @memdesc: Memory descriptor for the object
+ * @size: Size of the allocation in bytes
+ * @flags: Control flags for the allocation
+ * @priv: Internal flags for the allocation
  *
- * Free the sg list by collapsing any physical adjacent pages.
- * If pool is configured, pages are added back to the pool.
- * If shmem is used for allocation, kgsl refcount on the page
- * is decremented.
+ * Allocate GPU memory on behalf of the user.
+ * Return: 0 on success or negative on failure.
  */
-void kgsl_free_pages_from_sgt(struct kgsl_memdesc *memdesc);
+int kgsl_allocate_user(struct kgsl_device *device, struct kgsl_memdesc *memdesc,
+		u64 size, u64 flags, u32 priv);
+
+/**
+ * kgsl_allocate_global - Allocate kernel visible GPU memory
+ * @device: A GPU device handle
+ * @size: Size of the allocation in bytes
+ * @flags: Control flags for the allocation
+ * @priv: Internal flags for the allocation
+ *
+ * Allocate GPU memory on for use by the kernel. Kernel objects are
+ * automatically mapped into the kernel address space (except for secure).
+ * Return: The memory descriptor on success or a ERR_PTR encoded error on
+ * failure.
+ */
+struct kgsl_memdesc *kgsl_allocate_global(struct kgsl_device *device,
+		u64 size, u64 flags, u32 priv, const char *name);
+
+/**
+ * kgsl_allocate_global_fixed - Allocate a global GPU memory object from a fixed
+ * region defined in the device tree
+ * @device: A GPU device handle
+ * @size: Size of the allocation in bytes
+ * @flags: Control flags for the allocation
+ * @priv: Internal flags for the allocation
+ *
+ * Allocate a global GPU object for use by all processes. The buffer is
+ * added to the list of global buffers that get mapped into each newly created
+ * pagetable.
+ *
+ * Return: The memory descriptor on success or a ERR_PTR encoded error on
+ * failure.
+ */
+struct kgsl_memdesc *kgsl_allocate_global_fixed(struct kgsl_device *device,
+		const char *resource, const char *name);
+
+/**
+ * kgsl_free_globals - Free all global objects
+ * @device: A GPU device handle
+ *
+ * Free all the global buffer objects. Should only be called during shutdown
+ * after the pagetables have been freed
+ */
+void kgsl_free_globals(struct kgsl_device *device);
+
+/**
+ * kgsl_sharedmem_vm_map_readonly - Map a range from an entry into VM
+ * @memdesc: Memory descriptor for the object
+ * @offset: Offset from the start of the entry in bytes
+ * @size: Size of the mapping in bytes
+ * @page_count: Returns the number of pages mapped
+ *
+ * Maps a range from the object associated with memdesc into virtual memory
+ * using vm_map_ram. NULL or otherwise invalid pages from the entry will
+ * automatically be handled as pointing to the zero page to provide a legal
+ * mapping across the full requested range.
+ *
+ * Return: The requested mapping on success or an ERR_PTR encoded error on
+ * failure.
+ */
+void *kgsl_sharedmem_vm_map_readonly(struct kgsl_memdesc *memdesc, u64 offset,
+		u64 size, unsigned int *page_count);
+
+/**
+ * kgsl_sharedmem_vm_map - Map a range from an entry into VM
+ * @memdesc: Memory descriptor for the object
+ * @offset: Offset from the start of the entry in bytes
+ * @size: Size of the mapping in bytes
+ * @page_count: Returns the number of pages mapped
+ *
+ * Maps a range from the object associated with memdesc into virtual memory
+ * using vm_map_ram if the kernel has write permissions to the entry. NULL or
+ * otherwise invalid pages from the entry within the requested range will cause
+ * this function to error out.
+ *
+ * Return: The requested mapping on success or an ERR_PTR encoded error on
+ * failure.
+ */
+void *kgsl_sharedmem_vm_map_readwrite(struct kgsl_memdesc *memdesc, u64 offset,
+		u64 size, unsigned int *page_count);
 
 #define MEMFLAGS(_flags, _mask, _shift) \
 	((unsigned int) (((_flags) & (_mask)) >> (_shift)))
+
+/**
+ * kgsl_memdesc_get_*size - Get relevant parameters for memdescs
+ * @memdesc: Memory descriptor for the object
+ *
+ * Return: The relevant size for the requested parameters.
+ */
+uint64_t kgsl_memdesc_get_physsize(struct kgsl_memdesc *memdesc);
+uint64_t kgsl_memdesc_get_swapsize(struct kgsl_memdesc *memdesc);
+uint64_t kgsl_memdesc_get_mapsize(struct kgsl_memdesc *memdesc);
 
 /*
  * kgsl_memdesc_get_align - Get alignment flags from a memdesc
@@ -175,19 +225,6 @@ kgsl_memdesc_usermem_type(const struct kgsl_memdesc *memdesc)
 	return MEMFLAGS(memdesc->flags, KGSL_MEMFLAGS_USERMEM_MASK,
 		KGSL_MEMFLAGS_USERMEM_SHIFT);
 }
-
-/**
- * kgsl_memdesc_sg_dma - Turn a dma_addr (from CMA) into a sg table
- * @memdesc: Pointer to a memory descriptor
- * @addr: Physical address from the dma_alloc function
- * @size: Size of the chunk
- *
- * Create a sg table for the contiguous chunk specified by addr and size.
- *
- * Return: 0 on success or negative on failure.
- */
-int kgsl_memdesc_sg_dma(struct kgsl_memdesc *memdesc,
-		phys_addr_t addr, u64 size);
 
 /*
  * kgsl_memdesc_is_global - is this a globally mapped buffer?
@@ -281,48 +318,19 @@ kgsl_memdesc_footprint(const struct kgsl_memdesc *memdesc)
 		PAGE_SIZE);
 }
 
-/*
- * kgsl_allocate_global() - Allocate GPU accessible memory that will be global
- * across all processes
- * @device: The device pointer to which the memdesc belongs
- * @memdesc: Pointer to a KGSL memory descriptor for the memory allocation
- * @size: size of the allocation
- * @flags: Allocation flags that control how the memory is mapped
- * @priv: Priv flags that controls memory attributes
- *
- * Allocate contiguous memory for internal use and add the allocation to the
- * list of global pagetable entries that will be mapped at the same address in
- * all pagetables.  This is for use for device wide GPU allocations such as
- * ringbuffers.
- */
-int kgsl_allocate_global(struct kgsl_device *device,
-	struct kgsl_memdesc *memdesc, uint64_t size, uint64_t flags,
-	unsigned int priv, const char *name);
-
-/**
- * kgsl_free_global() - Free a device wide GPU allocation and remove it from the
- * global pagetable entry list
- *
- * @device: Pointer to the device
- * @memdesc: Pointer to the GPU memory descriptor to free
- *
- * Remove the specific memory descriptor from the global pagetable entry list
- * and free it
- */
-void kgsl_free_global(struct kgsl_device *device, struct kgsl_memdesc *memdesc);
-
 void kgsl_sharedmem_set_noretry(bool val);
 bool kgsl_sharedmem_get_noretry(void);
 
 /**
  * kgsl_alloc_sgt_from_pages() - Allocate a sg table
  *
- * @memdesc: memory descriptor of the allocation
+ * @pages: An array of pointers to allocated pages
+ * @page_count: Total number of pages allocated
  *
  * Allocate and return pointer to a sg table
  */
-static inline struct sg_table *kgsl_alloc_sgt_from_pages(
-				struct kgsl_memdesc *m)
+static inline struct sg_table *kgsl_alloc_sgt_from_pages(struct page **pages,
+		unsigned int page_count)
 {
 	int ret;
 	struct sg_table *sgt;
@@ -331,8 +339,8 @@ static inline struct sg_table *kgsl_alloc_sgt_from_pages(
 	if (sgt == NULL)
 		return ERR_PTR(-ENOMEM);
 
-	ret = sg_alloc_table_from_pages(sgt, m->pages, m->page_count, 0,
-					m->size, GFP_KERNEL);
+	ret = sg_alloc_table_from_pages(sgt, pages, page_count, 0,
+			(size_t)page_count << PAGE_SHIFT, GFP_KERNEL);
 	if (ret) {
 		kfree(sgt);
 		return ERR_PTR(ret);
@@ -357,40 +365,25 @@ static inline void kgsl_free_sgt(struct sg_table *sgt)
 	}
 }
 
-#include "kgsl_pool.h"
-
 /**
- * kgsl_get_page_size() - Get supported pagesize
- * @size: Size of the page
- * @align: Desired alignment of the size
+ * kgsl_cachemode_is_cached - Return true if the passed flags indicate a cached
+ * buffer
+ * @flags: A bitmask of KGSL_MEMDESC_ flags
  *
- * Return supported pagesize
+ * Return: true if the flags indicate a cached buffer
  */
-#ifndef CONFIG_ALLOC_BUFFERS_IN_4K_CHUNKS
-static inline int kgsl_get_page_size(size_t size, unsigned int align,
-			struct kgsl_memdesc *memdesc)
+static inline bool kgsl_cachemode_is_cached(u64 flags)
 {
-	if (memdesc->priv & KGSL_MEMDESC_USE_SHMEM)
-		return PAGE_SIZE;
+	u64 mode = FIELD_GET(KGSL_CACHEMODE_MASK, flags);
 
-	if (align >= ilog2(SZ_1M) && size >= SZ_1M &&
-		kgsl_pool_avaialable(SZ_1M))
-		return SZ_1M;
-	else if (align >= ilog2(SZ_64K) && size >= SZ_64K &&
-		kgsl_pool_avaialable(SZ_64K))
-		return SZ_64K;
-	else if (align >= ilog2(SZ_8K) && size >= SZ_8K &&
-		kgsl_pool_avaialable(SZ_8K))
-		return SZ_8K;
-	else
-		return PAGE_SIZE;
+	return (mode != KGSL_CACHEMODE_UNCACHED &&
+		mode != KGSL_CACHEMODE_WRITECOMBINE);
 }
-#else
-static inline int kgsl_get_page_size(size_t size, unsigned int align)
-{
-	return PAGE_SIZE;
-}
-#endif
+
+int kgsl_alloc_page(int *page_size, struct page **pages, unsigned int pages_len,
+		unsigned int *align, struct kgsl_memdesc *memdesc,
+		unsigned int page_off);
+void kgsl_free_page(struct kgsl_memdesc *memdesc, struct page *p);
 
 /**
  * kgsl_gfp_mask() - get gfp_mask to be used

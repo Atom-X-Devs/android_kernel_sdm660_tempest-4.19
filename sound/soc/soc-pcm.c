@@ -1349,7 +1349,7 @@ static int dpcm_be_connect(struct snd_soc_pcm_runtime *fe,
 			stream ? "capture" : "playback",  fe->dai_link->name,
 			stream ? "<-" : "->", be->dai_link->name);
 
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_SND_SOC_DEBUG
 	if (fe->debugfs_dpcm_root)
 		dpcm->debugfs_state = debugfs_create_u32(be->dai_link->name, 0644,
 				fe->debugfs_dpcm_root, &dpcm->state);
@@ -1405,7 +1405,7 @@ void dpcm_be_disconnect(struct snd_soc_pcm_runtime *fe, int stream)
 		/* BEs still alive need new FE */
 		dpcm_be_reparent(fe, dpcm->be, stream);
 
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_SND_SOC_DEBUG
 		debugfs_remove(dpcm->debugfs_state);
 #endif
 		spin_lock(&fe->card->dpcm_lock);
@@ -3726,7 +3726,7 @@ int snd_soc_dpcm_can_be_params(struct snd_soc_pcm_runtime *fe,
 }
 EXPORT_SYMBOL_GPL(snd_soc_dpcm_can_be_params);
 
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_SND_SOC_DEBUG
 static const char *dpcm_state_string(enum snd_soc_dpcm_state state)
 {
 	switch (state) {

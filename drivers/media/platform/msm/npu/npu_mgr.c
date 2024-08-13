@@ -749,10 +749,11 @@ static int npu_reboot_handler(struct notifier_block *this,
 	NPU_INFO("Device is rebooting with code %d\n", code);
 
 	if ((code == NOTIFY_DONE) || (code == SYS_POWER_OFF)) {
-		mutex_lock(&host_ctx->lock);
 		host_ctx->dev_shuttingdown = true;
-		complete_pending_commands(host_ctx);
-		mutex_unlock(&host_ctx->lock);
+		if (mutex_trylock(&host_ctx->lock)) {
+			complete_pending_commands(host_ctx);
+			mutex_unlock(&host_ctx->lock);
+		}
 	}
 
 	return NOTIFY_DONE;
@@ -2933,7 +2934,7 @@ void npu_host_cleanup_networks(struct npu_client *client)
 	for (i = 0; i < MAX_LOADED_NETWORK; i++) {
 		network = &host_ctx->networks[i];
 		if (network->client == client) {
-			NPU_WARN("network %d is not unloaded before close\n",
+			NPU_DBG("network %d is not unloaded before close\n",
 				network->network_hdl);
 			unload_req.network_hdl = network->network_hdl;
 			npu_host_unload_network(client, &unload_req);
@@ -2944,7 +2945,7 @@ void npu_host_cleanup_networks(struct npu_client *client)
 	while (!list_empty(&client->mapped_buffer_list)) {
 		ion_buf = list_first_entry(&client->mapped_buffer_list,
 			struct npu_ion_buf, list);
-		NPU_WARN("unmap buffer %x:%llx\n", ion_buf->fd, ion_buf->iova);
+		NPU_DBG("unmap buffer %x:%llx\n", ion_buf->fd, ion_buf->iova);
 		unmap_req.buf_ion_hdl = ion_buf->fd;
 		unmap_req.npu_phys_addr = ion_buf->iova;
 		npu_host_unmap_buf(client, &unmap_req);

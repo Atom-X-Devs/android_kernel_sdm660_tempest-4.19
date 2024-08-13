@@ -46,6 +46,7 @@ struct led_setting {
 	u64			on_ms;
 	u64			off_ms;
 	enum led_brightness	brightness;
+	int			brightness_offset;
 	bool			blink;
 	bool			breath;
 };
@@ -62,6 +63,7 @@ struct qpnp_led_dev {
 	u8			id;
 	bool			blinking;
 	bool			breathing;
+	bool			continuous_mode;
 };
 
 struct qpnp_tri_led_chip {
@@ -209,10 +211,29 @@ static int __tri_led_set(struct qpnp_led_dev *led)
 	return rc;
 }
 
+static enum led_brightness get_brightness(struct qpnp_led_dev *led)
+{
+	int brightness_offset = led->led_setting.brightness_offset;
+	enum led_brightness brightness = led->led_setting.brightness;
+
+	/*
+	 * both brightness and brightness_offset are 255 max
+	 */
+	if ((int) brightness + brightness_offset < 0 || brightness == 0)
+		brightness = 0;
+	else
+		brightness += brightness_offset;
+
+	if (brightness > LED_FULL)
+		brightness = LED_FULL;
+
+	return brightness;
+}
+
 static int qpnp_tri_led_set(struct qpnp_led_dev *led)
 {
 	u64 on_ms, off_ms, period_ns, duty_ns;
-	enum led_brightness brightness = led->led_setting.brightness;
+	enum led_brightness brightness = get_brightness(led);
 	int rc = 0;
 
 	if (led->led_setting.blink) {
@@ -267,6 +288,29 @@ static int qpnp_tri_led_set(struct qpnp_led_dev *led)
 	return rc;
 }
 
+static int qpnp_tri_led_set_brightness_locked(struct led_classdev *led_cdev)
+{
+	struct qpnp_led_dev *led =
+		container_of(led_cdev, struct qpnp_led_dev, cdev);
+	int rc = 0;
+	enum led_brightness brightness = get_brightness(led);
+
+	if (!!brightness)
+		led->led_setting.off_ms = 0;
+	else
+		led->led_setting.on_ms = 0;
+	led->led_setting.blink = false;
+	led->led_setting.breath = false;
+
+	rc = qpnp_tri_led_set(led);
+	if (rc)
+		dev_err(led->chip->dev, "Set led failed for %s, rc=%d\n",
+				led->label, rc);
+
+
+	return rc;
+}
+
 static int qpnp_tri_led_set_brightness(struct led_classdev *led_cdev,
 		enum led_brightness brightness)
 {
@@ -280,23 +324,13 @@ static int qpnp_tri_led_set_brightness(struct led_classdev *led_cdev,
 
 	if (brightness == led->led_setting.brightness &&
 			!led->blinking && !led->breathing) {
-		mutex_unlock(&led->lock);
-		return 0;
+		goto unlock;
 	}
 
 	led->led_setting.brightness = brightness;
-	if (!!brightness)
-		led->led_setting.off_ms = 0;
-	else
-		led->led_setting.on_ms = 0;
-	led->led_setting.blink = false;
-	led->led_setting.breath = false;
 
-	rc = qpnp_tri_led_set(led);
-	if (rc)
-		dev_err(led->chip->dev, "Set led failed for %s, rc=%d\n",
-				led->label, rc);
-
+	rc = qpnp_tri_led_set_brightness_locked(led_cdev);
+unlock:
 	mutex_unlock(&led->lock);
 
 	return rc;
@@ -316,6 +350,14 @@ static int qpnp_tri_led_set_blink(struct led_classdev *led_cdev,
 	int rc = 0;
 
 	mutex_lock(&led->lock);
+
+	if (led->continuous_mode) {
+		dev_dbg(led_cdev->dev, "Ignore set blink on LED initialization\n");
+		led->continuous_mode = false;
+		mutex_unlock(&led->lock);
+		return 0;
+	}
+
 	if (led->blinking && *on_ms == led->led_setting.on_ms &&
 			*off_ms == led->led_setting.off_ms) {
 		dev_dbg(led_cdev->dev, "Ignore, on/off setting is not changed: on %lums, off %lums\n",
@@ -390,9 +432,57 @@ unlock:
 	return (rc < 0) ? rc : count;
 }
 
+static ssize_t brightness_offset_show(struct device *dev, struct device_attribute *attr,
+							char *buf)
+{
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	struct qpnp_led_dev *led =
+		container_of(led_cdev, struct qpnp_led_dev, cdev);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", led->led_setting.brightness_offset);
+}
+
+static ssize_t brightness_offset_store(struct device *dev, struct device_attribute *attr,
+						const char *buf, size_t count)
+{
+	int rc;
+	int brightness_offset;
+	const int int_led_full = (int) LED_FULL;
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	struct qpnp_led_dev *led =
+		container_of(led_cdev, struct qpnp_led_dev, cdev);
+
+	rc = kstrtoint(buf, 0, &brightness_offset);
+	if (rc < 0)
+		return rc;
+
+	/* bounds check to prevent annoying checks later */
+	if (brightness_offset > int_led_full)
+		brightness_offset = int_led_full;
+	else if (brightness_offset < -int_led_full)
+		brightness_offset = -int_led_full;
+
+	cancel_work_sync(&led_cdev->set_brightness_work);
+
+	mutex_lock(&led->lock);
+	led->led_setting.brightness_offset = brightness_offset;
+
+	rc = qpnp_tri_led_set_brightness_locked(led_cdev);
+
+	mutex_unlock(&led->lock);
+
+	return (rc < 0) ? rc : count;
+}
+
 static DEVICE_ATTR_RW(breath);
 static const struct attribute *breath_attrs[] = {
 	&dev_attr_breath.attr,
+	NULL
+};
+
+static DEVICE_ATTR_RW(brightness_offset);
+static const struct attribute *brightness_offset_attrs[] = {
+	&dev_attr_brightness_offset.attr,
 	NULL
 };
 
@@ -429,15 +519,26 @@ static int qpnp_tri_led_register(struct qpnp_tri_led_chip *chip)
 				goto err_out;
 			}
 		}
+
+		rc = sysfs_create_files(&led->cdev.dev->kobj,
+			 brightness_offset_attrs);
+		if (rc < 0) {
+			dev_err(chip->dev, "Create brightness_offset file for %s led failed, rc=%d\n",
+					led->label, rc);
+			goto err_out;
+		}
 	}
 
 	return 0;
 
 err_out:
 	for (j = 0; j <= i; j++) {
-		if (j < i)
+		if (j < i) {
 			sysfs_remove_files(&chip->leds[j].cdev.dev->kobj,
 					breath_attrs);
+			sysfs_remove_files(&chip->leds[j].cdev.dev->kobj,
+					brightness_offset_attrs);
+		}
 		mutex_destroy(&chip->leds[j].lock);
 	}
 	return rc;
@@ -477,6 +578,7 @@ static int qpnp_tri_led_parse_dt(struct qpnp_tri_led_chip *chip)
 	struct pwm_args pargs;
 	const __be32 *addr;
 	int rc = 0, id, i = 0;
+	int initial_brightness = 0;
 
 	addr = of_get_address(chip->dev->of_node, 0, NULL, NULL);
 	if (!addr) {
@@ -530,9 +632,22 @@ static int qpnp_tri_led_parse_dt(struct qpnp_tri_led_chip *chip)
 			return -EINVAL;
 		}
 
+		rc = of_property_read_u32(child_node, "qcom,default-brightness",
+				&initial_brightness);
+		if (rc && rc != -EINVAL) {
+			dev_err(chip->dev, "Get led brightness failed, rc=%d\n",
+							rc);
+			return rc;
+		}
+
 		led = &chip->leds[i++];
 		led->chip = chip;
 		led->id = id;
+		led->led_setting.brightness = initial_brightness;
+
+		led->continuous_mode = of_property_read_bool(child_node,
+				"qcom,continuous-mode");
+
 		led->label =
 			of_get_property(child_node, "label", NULL) ? :
 							child_node->name;

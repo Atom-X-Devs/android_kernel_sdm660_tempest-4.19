@@ -322,7 +322,10 @@ enum {
 	UFSHCD_UIC_DME_ERROR = (1 << 5), /* DME error */
 };
 
-#define DEFAULT_UFSHCD_DBG_PRINT_EN	UFSHCD_DBG_PRINT_ALL
+#define DEFAULT_UFSHCD_DBG_PRINT_EN \
+		(UFSHCD_DBG_PRINT_CLK_FREQ_EN | UFSHCD_DBG_PRINT_UIC_ERR_HIST_EN | \
+		 UFSHCD_DBG_PRINT_TRS_EN | UFSHCD_DBG_PRINT_TMRS_EN | \
+		 UFSHCD_DBG_PRINT_PWR_EN | UFSHCD_DBG_PRINT_HOST_STATE_EN)
 
 #define ufshcd_set_eh_in_progress(h) \
 	((h)->eh_flags |= UFSHCD_EH_IN_PROGRESS)
@@ -10157,7 +10160,7 @@ static int ufshcd_set_dev_pwr_mode(struct ufs_hba *hba,
 	 * already suspended childs.
 	 */
 	ret = scsi_execute(sdp, cmd, DMA_NONE, NULL, 0, NULL, &sshdr,
-			START_STOP_TIMEOUT, 0, 0, RQF_PM, NULL);
+			msecs_to_jiffies(10000), 0, 0, RQF_PM, NULL);
 	if (ret) {
 		sdev_printk(KERN_WARNING, sdp,
 			    "START_STOP failed for power mode: %d, result %x\n",

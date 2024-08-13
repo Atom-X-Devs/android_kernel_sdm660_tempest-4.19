@@ -98,6 +98,19 @@ config IPC_LOGGING
 
 	  If in doubt, say no.
 
+config IPC_LOGGING_ENABLE_ALLOWLIST
+	tristate "Enable ipc logging for allowed driver only"
+	depends on IPC_LOGGING
+	help
+	  on Oculus A12, majority of the drivers are not using IPC logging anymore,
+	  Except Hollywood bluetooth uart. Use this option to achieve this purpose.
+
+config IPC_LOGGING_ALLOWLIST
+	string "Allowed driver for ipc logging"
+	depends on IPC_LOGGING_ENABLE_ALLOWLIST
+	help
+	  this string defines the prefix of the module name to be allowed
+
 config QCOM_RTB
 	bool "Register tracing"
 	help
@@ -141,6 +154,13 @@ config TRACING
 	select BINARY_PRINTF
 	select EVENT_TRACING
 	select TRACE_CLOCK
+
+config KERNEL_ATRACE
+	bool "Kernel atrace-like trace events"
+	depends on TRACING
+	default y if DEBUG_KERNEL
+	help
+	  Adds tracing functions similar to Android's "atrace" calls.
 
 config GENERIC_TRACER
 	bool

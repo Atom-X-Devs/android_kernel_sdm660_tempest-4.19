@@ -223,6 +223,14 @@ config QCOM_GENI_SE
 	  module is used to configure and read the configuration from the
 	  Serial Engines.
 
+config QCOM_GENI_SE_DEBUG
+	bool "Track debug logs for QCOM GENI Serial Engine"
+	depends on QCOM_GENI_SE
+	default n
+	help
+	  This option enables tracking of debug logs for the QCOM GENI serial
+	  engine driver.
+
 config IPA3_REGDUMP
 	bool "Dump or collect IPA/GSI register values on Linux crash"
 	depends on IPA3

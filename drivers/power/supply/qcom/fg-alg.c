@@ -271,6 +271,43 @@ int get_cycle_counts(struct cycle_counter *counter, const char **buf)
 }
 
 /**
+ * get_cycles_buckets -
+ * @counter: Cycle counter object
+ * @buf: Bucket cycle counts formatted in a string returned to the caller
+ *
+ * Get cycle count for all buckets in a string formatted for the
+ * cycle_counts_buckets
+ *
+ */
+int get_cycles_buckets(struct cycle_counter *counter, char *buf)
+{
+	int i, rc, len = 0;
+
+	for (i = 1; i <= BUCKET_COUNT; i++) {
+		counter->id = i;
+		rc = get_bucket_cycle_count(counter);
+		if (rc < 0) {
+			pr_err("Couldn't get cycle count rc=%d\n", rc);
+			return rc;
+		}
+
+		if (sizeof(counter->str_buf) - len < 8) {
+			pr_err("Invalid length %d\n", len);
+			return -EINVAL;
+		}
+
+		len += scnprintf(buf + len, PAGE_SIZE - len, "%d", rc);
+
+		if (i == BUCKET_COUNT)
+			len += scnprintf(buf + len, PAGE_SIZE - len, "\n");
+		else
+			len += scnprintf(buf + len, PAGE_SIZE - len, " ");
+	}
+
+	return len;
+}
+
+/**
  * cycle_count_init -
  * @counter: Cycle counter object
  *

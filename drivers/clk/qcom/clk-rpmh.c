@@ -281,6 +281,24 @@ static const struct clk_rpmh_desc clk_rpmh_kona = {
 	.num_clks = ARRAY_SIZE(kona_rpmh_clocks),
 };
 
+DEFINE_CLK_RPMH_ARC(hollywood, bi_tcxo, bi_tcxo_ao, "xo.lvl", 0x3, 2);
+DEFINE_CLK_RPMH_VRM(hollywood, ln_bb_clk1, ln_bb_clk1_ao, "lnbclka1", 2);
+DEFINE_CLK_RPMH_VRM_OPT(hollywood, rf_clkd4, rf_clkd4_ao, "rfclkd4", 1);
+
+static struct clk_hw *hollywood_rpmh_clocks[] = {
+	[RPMH_CXO_CLK]		= &hollywood_bi_tcxo.hw,
+	[RPMH_CXO_CLK_A]	= &hollywood_bi_tcxo_ao.hw,
+	[RPMH_LN_BB_CLK1]	= &hollywood_ln_bb_clk1.hw,
+	[RPMH_LN_BB_CLK1_A]	= &hollywood_ln_bb_clk1_ao.hw,
+	[RPMH_RF_CLKD4]		= &hollywood_rf_clkd4.hw,
+	[RPMH_RF_CLKD4_A]	= &hollywood_rf_clkd4_ao.hw,
+};
+
+static const struct clk_rpmh_desc clk_rpmh_hollywood = {
+	.clks = hollywood_rpmh_clocks,
+	.num_clks = ARRAY_SIZE(hollywood_rpmh_clocks),
+};
+
 DEFINE_CLK_RPMH_ARC(lito, bi_tcxo, bi_tcxo_ao, "xo.lvl", 0x3, 2);
 DEFINE_CLK_RPMH_VRM(lito, ln_bb_clk2, ln_bb_clk2_ao, "lnbclka2", 2);
 DEFINE_CLK_RPMH_VRM(lito, ln_bb_clk3, ln_bb_clk3_ao, "lnbclka3", 2);
@@ -438,6 +456,7 @@ static const struct of_device_id clk_rpmh_match_table[] = {
 	{ .compatible = "qcom,lagoon-rpmh-clk", .data = &clk_rpmh_lagoon},
 	{ .compatible = "qcom,litomagnus-rpmh-clk",
 						.data = &clk_rpmh_litomagnus},
+	{ .compatible = "qcom,hollywood-rpmh-clk", .data = &clk_rpmh_hollywood},
 	{ }
 };
 MODULE_DEVICE_TABLE(of, clk_rpmh_match_table);

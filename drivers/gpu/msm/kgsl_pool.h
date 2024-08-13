@@ -7,11 +7,10 @@
 
 void kgsl_init_page_pools(struct kgsl_device *device);
 void kgsl_exit_page_pools(void);
-void kgsl_pool_free_pages(struct page **pages, unsigned int page_count);
 int kgsl_pool_alloc_page(int *page_size, struct page **pages,
 			unsigned int pages_len, unsigned int *align,
 			struct kgsl_memdesc *memdesc);
 void kgsl_pool_free_page(struct page *p);
-bool kgsl_pool_avaialable(int size);
+int kgsl_pool_alloc_pages(struct kgsl_memdesc *memdesc, u64 size,
+			struct page ***pages);
 #endif /* __KGSL_POOL_H */
-

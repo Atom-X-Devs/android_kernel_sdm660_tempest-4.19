@@ -482,6 +482,7 @@ struct mem_size_stats {
 	u64 pss;
 	u64 pss_locked;
 	u64 swap_pss;
+	u64 swap_uss;
 	bool check_shmem_swap;
 };
 
@@ -547,9 +548,13 @@ static int smaps_pte_hole(unsigned long addr, unsigned long end,
 		struct mm_walk *walk)
 {
 	struct mem_size_stats *mss = walk->private;
+	u64 swap_usage;
 
-	mss->swap += shmem_partial_swap_usage(
-			walk->vma->vm_file->f_mapping, addr, end);
+	swap_usage = shmem_partial_swap_usage(walk->vma->vm_file->f_mapping,
+			addr, end);
+	mss->swap += swap_usage;
+	mss->swap_pss += swap_usage << PSS_SHIFT;
+	mss->swap_uss += swap_usage;
 
 	return 0;
 }
@@ -580,6 +585,7 @@ static void smaps_pte_entry(pte_t *pte, unsigned long addr,
 				mss->swap_pss += pss_delta;
 			} else {
 				mss->swap_pss += (u64)PAGE_SIZE << PSS_SHIFT;
+				mss->swap_uss += PAGE_SIZE;
 			}
 		} else if (is_migration_entry(swpent))
 			page = migration_entry_to_page(swpent);
@@ -592,9 +598,11 @@ static void smaps_pte_entry(pte_t *pte, unsigned long addr,
 		if (!page)
 			return;
 
-		if (radix_tree_exceptional_entry(page))
+		if (radix_tree_exceptional_entry(page)) {
 			mss->swap += PAGE_SIZE;
-		else
+			mss->swap_pss += (u64)PAGE_SIZE << PSS_SHIFT;
+			mss->swap_uss += PAGE_SIZE;
+		} else
 			put_page(page);
 
 		return;
@@ -803,6 +811,8 @@ static void smap_gather_stats(struct vm_area_struct *vma,
 		if (!shmem_swapped || (vma->vm_flags & VM_SHARED) ||
 					!(vma->vm_flags & VM_WRITE)) {
 			mss->swap += shmem_swapped;
+			mss->swap_pss += shmem_swapped << PSS_SHIFT;
+			mss->swap_uss += shmem_swapped;
 		} else {
 			mss->check_shmem_swap = true;
 			smaps_walk.pte_hole = smaps_pte_hole;
@@ -815,6 +825,66 @@ static void smap_gather_stats(struct vm_area_struct *vma,
 
 #define SEQ_PUT_DEC(str, val) \
 		seq_put_decimal_ull_width(m, str, (val) >> 10, 8)
+
+static int show_private_map(struct seq_file *m, void *v)
+{
+	struct vm_area_struct *vma = v;
+	struct mem_size_stats mss;
+
+	memset(&mss, 0, sizeof(mss));
+
+	smap_gather_stats(vma, &mss);
+
+	SEQ_PUT_DEC(NULL, mss.private_clean);
+	SEQ_PUT_DEC(" ", mss.private_dirty);
+	SEQ_PUT_DEC(" ", mss.swap_uss);
+	seq_puts(m, " : ");
+	show_map_vma(m, vma);
+
+	m_cache_vma(m, vma);
+
+	return 0;
+}
+
+static void *start_smap_inline(struct seq_file *m, loff_t *ppos)
+{
+	void *start = m_start(m, ppos);
+
+	if (!IS_ERR_OR_NULL(start) && *ppos == 0) {
+		seq_printf(m, "% 8s", "RSS");
+		seq_printf(m, " % 8s", "PSS");
+		seq_printf(m, " % 8s", "SClean");
+		seq_printf(m, " % 8s", "SDirty");
+		seq_printf(m, " % 8s", "PClean");
+		seq_printf(m, " % 8s", "PDirty");
+		seq_printf(m, " : VMA\n");
+	}
+
+	return start;
+}
+
+static int show_smap_inline(struct seq_file *m, void *v)
+{
+	struct vm_area_struct *vma = v;
+	struct mem_size_stats mss;
+
+	memset(&mss, 0, sizeof(mss));
+
+	smap_gather_stats(vma, &mss);
+
+	SEQ_PUT_DEC(NULL, mss.resident);
+	SEQ_PUT_DEC(" ", mss.pss >> PSS_SHIFT);
+	SEQ_PUT_DEC(" ", mss.shared_clean);
+	SEQ_PUT_DEC(" ", mss.shared_dirty);
+	SEQ_PUT_DEC(" ", mss.private_clean);
+	SEQ_PUT_DEC(" ", mss.private_dirty);
+	seq_puts(m, " : ");
+	show_map_vma(m, vma);
+
+	m_cache_vma(m, vma);
+
+	return 0;
+}
 
 /* Show the contents common for smaps and smaps_rollup */
 static void __show_smap(struct seq_file *m, const struct mem_size_stats *mss)
@@ -836,6 +906,7 @@ static void __show_smap(struct seq_file *m, const struct mem_size_stats *mss)
 	SEQ_PUT_DEC(" kB\nSwap:           ", mss->swap);
 	SEQ_PUT_DEC(" kB\nSwapPss:        ",
 					mss->swap_pss >> PSS_SHIFT);
+	SEQ_PUT_DEC(" kB\nSwapUss:        ", mss->swap_uss);
 	SEQ_PUT_DEC(" kB\nLocked:         ",
 					mss->pss_locked >> PSS_SHIFT);
 	seq_puts(m, " kB\n");
@@ -927,6 +998,18 @@ out_put_task:
 }
 #undef SEQ_PUT_DEC
 
+static const struct seq_operations proc_pid_private_maps_op = {
+	.start	= m_start,
+	.next	= m_next,
+	.stop	= m_stop,
+	.show	= show_private_map
+};
+
+static int pid_private_maps_open(struct inode *inode, struct file *file)
+{
+	return do_maps_open(inode, file, &proc_pid_private_maps_op);
+}
+
 static const struct seq_operations proc_pid_smaps_op = {
 	.start	= m_start,
 	.next	= m_next,
@@ -937,6 +1020,18 @@ static const struct seq_operations proc_pid_smaps_op = {
 static int pid_smaps_open(struct inode *inode, struct file *file)
 {
 	return do_maps_open(inode, file, &proc_pid_smaps_op);
+}
+
+static const struct seq_operations proc_pid_smaps_inline_op = {
+	.start	= start_smap_inline,
+	.next	= m_next,
+	.stop	= m_stop,
+	.show	= show_smap_inline
+};
+
+static int pid_smaps_inline_open(struct inode *inode, struct file *file)
+{
+	return do_maps_open(inode, file, &proc_pid_smaps_inline_op);
 }
 
 static int smaps_rollup_open(struct inode *inode, struct file *file)
@@ -980,8 +1075,22 @@ static int smaps_rollup_release(struct inode *inode, struct file *file)
 	return single_release(inode, file);
 }
 
+const struct file_operations proc_pid_private_maps_operations = {
+	.open		= pid_private_maps_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= proc_map_release,
+};
+
 const struct file_operations proc_pid_smaps_operations = {
 	.open		= pid_smaps_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= proc_map_release,
+};
+
+const struct file_operations proc_pid_smaps_inline_operations = {
+	.open		= pid_smaps_inline_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
 	.release	= proc_map_release,

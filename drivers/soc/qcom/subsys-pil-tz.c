@@ -13,6 +13,7 @@
 #include <linux/regulator/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
+#include <linux/slab.h>
 
 #include <linux/msm-bus-board.h>
 #include <linux/msm-bus.h>
@@ -613,14 +614,9 @@ static int pil_init_image_trusted(struct pil_desc *pil,
 	u32 scm_ret = 0;
 	void *mdata_buf;
 	int ret;
-	struct scm_desc desc = {0};
-	struct pil_map_fw_info map_fw_info = {
-		.attrs = pil->attrs,
-		.region = region,
-		.base_addr = mdata_phys,
-		.dev = pil->dev,
-	};
-	void *map_data = pil->map_data ? pil->map_data : &map_fw_info;
+	unsigned long attrs = 0;
+	struct device *dev;
+	struct scm_desc *desc;
 
 	if (d->subsys_desc.no_auth)
 		return 0;
@@ -629,24 +625,34 @@ static int pil_init_image_trusted(struct pil_desc *pil,
 	if (ret)
 		return ret;
 
-	mdata_buf = pil->map_fw_mem(mdata_phys, size, map_data);
+	dev = kzalloc(sizeof(struct device), GFP_KERNEL);
+	arch_setup_dma_ops(dev, 0, 0, NULL, 0);
+
+	dev->coherent_dma_mask =
+		DMA_BIT_MASK(sizeof(dma_addr_t) * 8);
+	attrs |= DMA_ATTR_STRONGLY_ORDERED;
+	mdata_buf = dma_alloc_attrs(dev, size, &mdata_phys, GFP_KERNEL,
+					attrs);
 	if (!mdata_buf) {
 		dev_err(pil->dev, "Failed to map memory for metadata.\n");
 		scm_pas_disable_bw();
+		kfree(dev);
 		return -ENOMEM;
 	}
 
 	memcpy(mdata_buf, metadata, size);
 
-	desc.args[0] = d->pas_id;
-	desc.args[1] = mdata_phys;
-	desc.arginfo = SCM_ARGS(2, SCM_VAL, SCM_RW);
-	ret = scm_call2(SCM_SIP_FNID(SCM_SVC_PIL, PAS_INIT_IMAGE_CMD),
-			&desc);
-	scm_ret = desc.ret[0];
+	desc = kzalloc(sizeof(struct scm_desc), GFP_KERNEL);
+	desc->args[0] = d->pas_id;
+	desc->args[1] = mdata_phys;
+	desc->arginfo = SCM_ARGS(2, SCM_VAL, SCM_RW);
+	ret = scm_call2(SCM_SIP_FNID(SCM_SVC_PIL, PAS_INIT_IMAGE_CMD), desc);
+	scm_ret = desc->ret[0];
+	kfree(desc);
 
-	pil->unmap_fw_mem(mdata_buf, size, map_data);
+	dma_free_attrs(dev, size, mdata_buf, mdata_phys, attrs);
 	scm_pas_disable_bw();
+	kfree(dev);
 	if (ret)
 		return ret;
 	return scm_ret;

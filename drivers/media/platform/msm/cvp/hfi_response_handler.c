@@ -426,7 +426,7 @@ retry:
 			}
 		}
 
-		inst = match && kref_get_unless_zero(&inst->kref) ? inst : NULL;
+		inst = match ? inst : NULL;
 		mutex_unlock(&core->lock);
 	} else {
 		if (core->state == CVP_CORE_UNINIT)
@@ -480,7 +480,7 @@ static int hfi_process_session_cvp_msg(u32 device_id,
 	struct cvp_session_msg *sess_msg;
 	struct msm_cvp_inst *inst = NULL;
 	struct msm_cvp_core *core;
-	void *session_id;
+	uintptr_t session_id;
 
 	if (!pkt) {
 		dprintk(CVP_ERR, "%s: invalid param\n", __func__);
@@ -489,9 +489,9 @@ static int hfi_process_session_cvp_msg(u32 device_id,
 		dprintk(CVP_ERR, "%s: bad_pkt_size %d\n", __func__, pkt->size);
 		return -E2BIG;
 	}
-	session_id = (void *)(uintptr_t)get_msg_session_id(pkt);
+	session_id = (uintptr_t)get_msg_session_id(pkt);
 	core = list_first_entry(&cvp_driver->cores, struct msm_cvp_core, list);
-	inst = cvp_get_inst_from_id(core, (unsigned int)session_id);
+	inst = cvp_get_inst_from_id(core, session_id);
 
 	if (!inst) {
 		dprintk(CVP_ERR, "%s: invalid session\n", __func__);
@@ -525,7 +525,7 @@ static int hfi_process_session_cvp_msg(u32 device_id,
 	sess_msg = kmem_cache_alloc(cvp_driver->msg_cache, GFP_KERNEL);
 	if (sess_msg == NULL) {
 		dprintk(CVP_ERR, "%s runs out msg cache memory\n", __func__);
-		goto error_no_mem;
+		return -ENOMEM;
 	}
 
 	memcpy(&sess_msg->pkt, pkt, get_msg_size());
@@ -548,14 +548,11 @@ static int hfi_process_session_cvp_msg(u32 device_id,
 
 	info->response_type = HAL_NO_RESP;
 
-	cvp_put_inst(inst);
 	return 0;
 
 error_handle_msg:
 	spin_unlock(&inst->session_queue.lock);
 	kmem_cache_free(cvp_driver->msg_cache, sess_msg);
-error_no_mem:
-	cvp_put_inst(inst);
 	return -ENOMEM;
 }
 

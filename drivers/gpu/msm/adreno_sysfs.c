@@ -65,7 +65,7 @@ static int _usesgmem_store(struct adreno_device *adreno_dev,
 {
 	struct adreno_preemption *preempt = &adreno_dev->preempt;
 
-	preempt->usesgmem = val ? 1 : 0;
+	preempt->usesgmem = val ? true : false;
 	return 0;
 }
 
@@ -81,7 +81,7 @@ static int _skipsaverestore_store(struct adreno_device *adreno_dev,
 {
 	struct adreno_preemption *preempt = &adreno_dev->preempt;
 
-	preempt->skipsaverestore = val ? 1 : 0;
+	preempt->skipsaverestore = val ? true : false;
 	return 0;
 }
 
@@ -101,7 +101,20 @@ static int _ft_pagefault_policy_store(struct adreno_device *adreno_dev,
 	mutex_lock(&device->mutex);
 	val &= KGSL_FT_PAGEFAULT_MASK;
 
-	if (test_bit(ADRENO_DEVICE_STARTED, &adreno_dev->priv))
+#if IS_ENABLED(CONFIG_QCOM_KGSL_LAZY_ALLOCATION)
+	/*
+	 * Stall-on-fault is *required* by lazy allocation, so make sure
+	 * it can't inadvertently be disabled or else allocations might
+	 * break in "fun" and hard-to-diagnose ways.
+	 */
+	val |= BIT(KGSL_FT_PAGEFAULT_STALL_ENABLE);
+#endif
+
+	/* Setting GPUHALT_ENABLE implies stall-on-fault (STALL_ENABLE). */
+	if (val & BIT(KGSL_FT_PAGEFAULT_GPUHALT_ENABLE))
+		val |= BIT(KGSL_FT_PAGEFAULT_STALL_ENABLE);
+
+	if (device->state == KGSL_STATE_ACTIVE)
 		ret = kgsl_mmu_set_pagefault_policy(&device->mmu,
 			(unsigned long) val);
 
@@ -146,7 +159,7 @@ _gpuhtw_llc_slice_enable_show(struct adreno_device *adreno_dev)
 static int _ft_long_ib_detect_store(struct adreno_device *adreno_dev,
 		unsigned int val)
 {
-	adreno_dev->long_ib_detect = val;
+	adreno_dev->long_ib_detect = val ? true : false;
 	return 0;
 }
 

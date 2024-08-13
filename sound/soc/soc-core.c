@@ -45,7 +45,7 @@
 
 #define NAME_SIZE	32
 
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_SND_SOC_DEBUG
 struct dentry *snd_soc_debugfs_root;
 EXPORT_SYMBOL_GPL(snd_soc_debugfs_root);
 #endif
@@ -132,7 +132,7 @@ static const struct attribute_group *soc_dev_attr_groups[] = {
 	NULL
 };
 
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_SND_SOC_DEBUG
 static void soc_init_component_debugfs(struct snd_soc_component *component)
 {
 	if (!component->card->debugfs_card_root)
@@ -1559,7 +1559,7 @@ static int soc_probe_link_dais(struct snd_soc_card *card,
 	if (ret)
 		return ret;
 
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_SND_SOC_DEBUG
 	/* add DPCM sysfs entries */
 	if (dai_link->dynamic)
 		soc_dpcm_debugfs_add(rtd);
@@ -2056,7 +2056,7 @@ static int snd_soc_instantiate_card(struct snd_soc_card *card)
 	card->dapm.card = card;
 	list_add(&card->dapm.list, &card->dapm_list);
 
-#ifdef CONFIG_DEBUG_FS
+#ifdef CONFIG_SND_SOC_DEBUG
 	snd_soc_dapm_debugfs_init(&card->dapm, card->debugfs_card_root);
 #endif
 

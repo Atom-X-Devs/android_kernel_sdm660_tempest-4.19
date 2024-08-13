@@ -309,6 +309,8 @@ struct fg_gen4_chip {
 	int			scale_timer;
 	int			current_now;
 	int			calib_level;
+	int			charge_profile;
+	int			debug_cycle_count;
 	bool			first_profile_load;
 	bool			ki_coeff_dischg_en;
 	bool			slope_limit_en;
@@ -3455,6 +3457,29 @@ static int fg_gen4_set_vbatt_low(struct fg_gen4_chip *chip)
 	return 0;
 }
 
+static void restore_cycle_counter_ram(struct cycle_counter *counter,
+			int *counts)
+{
+	int i, rc;
+
+	if (!counts) {
+		pr_err("counts is NULL");
+		return;
+	}
+
+	mutex_lock(&counter->lock);
+	for (i = 0; i < BUCKET_COUNT; i++) {
+		pr_debug("BATT_CYCLE_NUMBER[%d] = 0x%04x\n",
+				i, counts[i]);
+		rc = counter->store_count(counter->data,
+			(u16 *)&counts[i], i, sizeof(u16));
+		if (rc < 0)
+			pr_err("Failed to write BATT_CYCLE_NUMBER[%d] rc: %d\n",
+				i, rc);
+	}
+	mutex_unlock(&counter->lock);
+}
+
 /* All irq handlers below this */
 
 static irqreturn_t fg_mem_attn_irq_handler(int irq, void *data)
@@ -4456,12 +4481,56 @@ static ssize_t esr_fast_cal_en_show(struct device *dev, struct device_attribute
 }
 static DEVICE_ATTR_RW(esr_fast_cal_en);
 
+static ssize_t cycle_counts_buckets_show(struct device *dev,
+			struct device_attribute *attr,
+			char *buf)
+{
+	int ret = 0;
+	struct fg_gen4_chip *chip = dev_get_drvdata(dev);
+
+	ret = get_cycles_buckets(chip->counter, buf);
+	if (ret < BUCKET_COUNT*2) {
+		pr_err("Error in showing cycle counts, rc=%d\n", ret);
+		return 0;
+	}
+
+	return ret;
+}
+
+static ssize_t cycle_counts_buckets_store(struct device *dev,
+			struct device_attribute *attr,
+			const char *buf, size_t count)
+{
+	int rc = 0;
+	int strval[BUCKET_COUNT];
+	struct fg_gen4_chip *chip = dev_get_drvdata(dev);
+
+	if (sscanf(buf, "%d %d %d %d %d %d %d %d",
+			&strval[0], &strval[1], &strval[2], &strval[3],
+			&strval[4], &strval[5], &strval[6], &strval[7])
+		!= BUCKET_COUNT) {
+		pr_err("Error storing cycle count arguments.\n");
+		return -EINVAL;
+	}
+
+	restore_cycle_counter_ram(chip->counter, strval);
+	rc = restore_cycle_count(chip->counter);
+	if (rc < 0) {
+		pr_err("Error in restoring cycle counts, rc=%d\n", rc);
+		return rc;
+	}
+
+	return count;
+}
+static DEVICE_ATTR_RW(cycle_counts_buckets);
+
 static struct attribute *fg_attrs[] = {
 	&dev_attr_profile_dump.attr,
 	&dev_attr_sram_dump_period_ms.attr,
 	&dev_attr_sram_dump_en.attr,
 	&dev_attr_restart.attr,
 	&dev_attr_esr_fast_cal_en.attr,
+	&dev_attr_cycle_counts_buckets.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(fg);
@@ -4558,7 +4627,11 @@ static int fg_psy_get_property(struct power_supply *psy,
 		rc = fg_gen4_get_charge_counter_shadow(chip, &pval->intval);
 		break;
 	case POWER_SUPPLY_PROP_CYCLE_COUNT:
-		rc = get_cycle_count(chip->counter, &pval->intval);
+		/* Set debug count to -1 will use the real count */
+		if (chip->debug_cycle_count < 0)
+			rc = get_cycle_count(chip->counter, &pval->intval);
+		else
+			pval->intval = chip->debug_cycle_count;
 		break;
 	case POWER_SUPPLY_PROP_CYCLE_COUNTS:
 		rc = get_cycle_counts(chip->counter, &pval->strval);
@@ -4617,6 +4690,9 @@ static int fg_psy_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CALIBRATE:
 		pval->intval = chip->calib_level;
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_PROFILE:
+		pval->intval = chip->charge_profile;
 		break;
 	default:
 		pr_err("unsupported property %d\n", psp);
@@ -4712,6 +4788,16 @@ static int fg_psy_set_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CALIBRATE:
 		rc = fg_gen4_set_calibrate_level(chip, pval->intval);
 		break;
+	case POWER_SUPPLY_PROP_CHARGE_PROFILE:
+		chip->charge_profile = pval->intval;
+		if (fg->fg_psy)
+			power_supply_changed(fg->fg_psy);
+		break;
+	case POWER_SUPPLY_PROP_CYCLE_COUNT:
+		chip->debug_cycle_count = pval->intval;
+		if (fg->fg_psy)
+			power_supply_changed(fg->fg_psy);
+		break;
 	default:
 		break;
 	}
@@ -4732,6 +4818,8 @@ static int fg_property_is_writeable(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CLEAR_SOH:
 	case POWER_SUPPLY_PROP_BATT_AGE_LEVEL:
 	case POWER_SUPPLY_PROP_CALIBRATE:
+	case POWER_SUPPLY_PROP_CHARGE_PROFILE:
+	case POWER_SUPPLY_PROP_CYCLE_COUNT:
 		return 1;
 	default:
 		break;
@@ -4763,6 +4851,7 @@ static enum power_supply_property fg_psy_props[] = {
 	POWER_SUPPLY_PROP_CHARGE_FULL,
 	POWER_SUPPLY_PROP_CHARGE_COUNTER,
 	POWER_SUPPLY_PROP_CHARGE_COUNTER_SHADOW,
+	POWER_SUPPLY_PROP_CYCLE_COUNT,
 	POWER_SUPPLY_PROP_CYCLE_COUNTS,
 	POWER_SUPPLY_PROP_SOC_REPORTING_READY,
 	POWER_SUPPLY_PROP_CLEAR_SOH,
@@ -4779,6 +4868,7 @@ static enum power_supply_property fg_psy_props[] = {
 	POWER_SUPPLY_PROP_POWER_AVG,
 	POWER_SUPPLY_PROP_SCALE_MODE_EN,
 	POWER_SUPPLY_PROP_CALIBRATE,
+	POWER_SUPPLY_PROP_CHARGE_PROFILE,
 };
 
 static const struct power_supply_desc fg_psy_desc = {
@@ -6232,6 +6322,8 @@ static int fg_gen4_probe(struct platform_device *pdev)
 	chip->esr_soh_cycle_count = -EINVAL;
 	chip->calib_level = -EINVAL;
 	chip->soh = -EINVAL;
+	chip->charge_profile = 0;
+	chip->debug_cycle_count = -1;
 	fg->regmap = dev_get_regmap(fg->dev->parent, NULL);
 	if (!fg->regmap) {
 		dev_err(fg->dev, "Parent regmap is unavailable\n");
@@ -6401,6 +6493,10 @@ static int fg_gen4_probe(struct platform_device *pdev)
 	rc = fg_get_battery_voltage(fg, &volt_uv);
 	if (!rc)
 		rc = fg_get_msoc(fg, &msoc);
+
+	if (!rc && msoc == 0)
+		rc = fg_masked_write(fg, BATT_SOC_RESTART(fg), RESTART_GO_BIT,
+			RESTART_GO_BIT);
 
 	if (!rc)
 		rc = fg_gen4_get_battery_temp(fg, &batt_temp);

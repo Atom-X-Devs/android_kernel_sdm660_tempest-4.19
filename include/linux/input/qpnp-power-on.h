@@ -46,6 +46,10 @@ enum pon_power_off_type {
 	PON_POWER_OFF_MAX_TYPE		= 0x10,
 };
 
+/* KEEP THIS SYNCED WITH `RebootReasonType`
+ * which is in bootable/bootloader/kona/edk2/...
+ * ../QcomModulePkg/Include/Library/ShutdownServices.h
+ */
 enum pon_restart_reason {
 	PON_RESTART_REASON_UNKNOWN		= 0x00,
 	PON_RESTART_REASON_RECOVERY		= 0x01,
@@ -54,6 +58,11 @@ enum pon_restart_reason {
 	PON_RESTART_REASON_DMVERITY_CORRUPTED	= 0x04,
 	PON_RESTART_REASON_DMVERITY_ENFORCE	= 0x05,
 	PON_RESTART_REASON_KEYS_CLEAR		= 0x06,
+	PON_RESTART_REASON_KERNEL_PANIC         = 0x07,
+	PON_RESTART_REASON_UPGRADE              = 0x08,
+	PON_RESTART_REASON_SILENT_BOOT          = 0x09,
+	PON_RESTART_REASON_SHUTDOWN_THERMAL     = 0x0A,
+	PON_RESTART_REASON_MDM_REBOOT		  	= 0x0B,
 };
 
 #ifdef CONFIG_INPUT_QPNP_POWER_ON

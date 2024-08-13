@@ -57,6 +57,12 @@ enum {
 	HW_PLATFORM_SBC = 24,
 	HW_PLATFORM_HDK = 31,
 	HW_PLATFORM_IDP = 34,
+	HW_PLATFORM_OCULUS_START = 64,
+	HW_PLATFORM_OCULUS_HOLLYWOOD = 64,
+	HW_PLATFORM_OCULUS_COMET = 65,
+	HW_PLATFORM_OCULUS_SEACLIFF = 66,
+	HW_PLATFORM_OCULUS_SEABRIGHT = 67,
+	HW_PLATFORM_OCULUS_END = 67,
 	HW_PLATFORM_INVALID
 };
 
@@ -78,7 +84,11 @@ const char *hw_platform[] = {
 	[HW_PLATFORM_STP] = "STP",
 	[HW_PLATFORM_SBC] = "SBC",
 	[HW_PLATFORM_HDK] = "HDK",
-	[HW_PLATFORM_IDP] = "IDP"
+	[HW_PLATFORM_IDP] = "IDP",
+	[HW_PLATFORM_OCULUS_HOLLYWOOD] = "Hollywood",
+	[HW_PLATFORM_OCULUS_COMET] = "Comet",
+	[HW_PLATFORM_OCULUS_SEACLIFF] = "Seacliff",
+	[HW_PLATFORM_OCULUS_SEABRIGHT] = "Seabright",
 };
 
 enum {
@@ -2025,7 +2035,7 @@ static void socinfo_print(void)
 	}
 }
 
-static void socinfo_select_format(void)
+static void __init socinfo_select_format(void)
 {
 	uint32_t f_maj = SOCINFO_VERSION_MAJOR(socinfo->v0_1.format);
 	uint32_t f_min = SOCINFO_VERSION_MINOR(socinfo->v0_1.format);

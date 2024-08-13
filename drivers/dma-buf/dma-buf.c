@@ -541,6 +541,11 @@ err_alloc_file:
 	return file;
 }
 
+int dma_buf_is_dma_buf_file(struct file *file)
+{
+	return is_dma_buf_file(file);
+}
+
 /**
  * DOC: dma buf device access
  *
