@@ -15,12 +15,8 @@
 
 #define PROC_AWAKE_ID 12 /* 12th bit */
 #define AWAKE_BIT BIT(PROC_AWAKE_ID)
+static struct qcom_smem_state *state;
 static struct wakeup_source *notify_ws;
-
-struct smp2p_state {
-	struct qcom_smem_state *state;
-	struct notifier_block nb;
-};
 
 /**
  * sleepstate_pm_notifier() - PM notifier callback function.
@@ -34,21 +30,24 @@ struct smp2p_state {
 static int sleepstate_pm_notifier(struct notifier_block *nb,
 				  unsigned long event, void *unused)
 {
-	struct smp2p_state *smp2p_info = container_of(nb, struct smp2p_state, nb);
-
 	switch (event) {
 	case PM_SUSPEND_PREPARE:
-		qcom_smem_state_update_bits(smp2p_info->state, AWAKE_BIT, 0);
+		qcom_smem_state_update_bits(state, AWAKE_BIT, 0);
 		usleep_range(10000, 10500); /* Tuned based on SMP2P latencies */
 		break;
 
 	case PM_POST_SUSPEND:
-		qcom_smem_state_update_bits(smp2p_info->state, AWAKE_BIT, AWAKE_BIT);
+		qcom_smem_state_update_bits(state, AWAKE_BIT, AWAKE_BIT);
 		break;
 	}
 
 	return NOTIFY_DONE;
 }
+
+static struct notifier_block sleepstate_pm_nb = {
+	.notifier_call = sleepstate_pm_notifier,
+	.priority = INT_MAX,
+};
 
 static irqreturn_t smp2p_sleepstate_handler(int irq, void *ctxt)
 {
@@ -62,21 +61,13 @@ static int smp2p_sleepstate_probe(struct platform_device *pdev)
 	int irq;
 	struct device *dev = &pdev->dev;
 	struct device_node *node = dev->of_node;
-	struct smp2p_state *smp2p_info;
 
-	smp2p_info = devm_kzalloc(dev, sizeof(*smp2p_info), GFP_KERNEL);
-	if (!smp2p_info)
-		return PTR_ERR(smp2p_info);
+	state = qcom_smem_state_get(&pdev->dev, NULL, &ret);
+	if (IS_ERR(state))
+		return PTR_ERR(state);
+	qcom_smem_state_update_bits(state, AWAKE_BIT, AWAKE_BIT);
 
-	smp2p_info->state = qcom_smem_state_get(&pdev->dev, NULL, &ret);
-	if (IS_ERR(smp2p_info->state))
-		return PTR_ERR(smp2p_info->state);
-	qcom_smem_state_update_bits(smp2p_info->state, AWAKE_BIT, AWAKE_BIT);
-
-	smp2p_info->nb.notifier_call = sleepstate_pm_notifier;
-	smp2p_info->nb.priority = INT_MAX;
-
-	ret = register_pm_notifier(&smp2p_info->nb);
+	ret = register_pm_notifier(&sleepstate_pm_nb);
 	if (ret) {
 		dev_err(dev, "%s: power state notif error %d\n", __func__, ret);
 		return ret;
@@ -107,7 +98,7 @@ static int smp2p_sleepstate_probe(struct platform_device *pdev)
 err:
 	wakeup_source_unregister(notify_ws);
 err_ws:
-	unregister_pm_notifier(&smp2p_info->nb);
+	unregister_pm_notifier(&sleepstate_pm_nb);
 	return ret;
 }
 
