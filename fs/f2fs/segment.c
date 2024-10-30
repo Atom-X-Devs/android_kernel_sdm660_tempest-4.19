@@ -2538,7 +2538,7 @@ out_unlock:
 	spin_unlock(&free_i->segmap_lock);
 
 	if (ret) {
-		f2fs_stop_checkpoint(sbi, false);
+		f2fs_stop_checkpoint(sbi, false, STOP_CP_REASON_NO_SEGMENT);
 		f2fs_bug_on(sbi, 1);
 	}
 	return ret;
