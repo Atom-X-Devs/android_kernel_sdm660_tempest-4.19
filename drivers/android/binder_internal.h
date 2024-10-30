@@ -471,7 +471,7 @@ struct binder_proc {
 	struct binder_stats stats;
 #endif
 	struct list_head delivered_death;
-	int max_threads;
+	u32 max_threads;
 	int requested_threads;
 	int requested_threads_started;
 	int tmp_ref;
