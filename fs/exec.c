@@ -74,6 +74,29 @@
 
 int suid_dumpable = 0;
 
+#define XIAOMI_LIBPERFMGR_BIN "/vendor/bin/hw/android.hardware.power-service.xiaomi-libperfmgr"
+#define LINEAGE_LIBPERFMGR_BIN "/vendor/bin/hw/android.hardware.power-service.lineage-libperfmgr"
+
+static struct task_struct *libperfmgr_tsk;
+bool task_is_libperfmgr(struct task_struct *p)
+{
+	struct task_struct *tsk;
+	bool ret;
+
+	rcu_read_lock();
+	tsk = READ_ONCE(libperfmgr_tsk);
+	ret = tsk && same_thread_group(p, tsk);
+	rcu_read_unlock();
+
+	return ret;
+}
+
+void dead_special_task(void)
+{
+	if (unlikely(current == libperfmgr_tsk))
+		WRITE_ONCE(libperfmgr_tsk, NULL);
+}
+
 static LIST_HEAD(formats);
 static DEFINE_RWLOCK(binfmt_lock);
 
@@ -1868,6 +1891,12 @@ static int __do_execve_file(int fd, struct filename *filename,
 			zygote32_sig = current->signal;
 		else if (unlikely(!strcmp(filename->name, ZYGOTE64_BIN)))
 			zygote64_sig = current->signal;
+	}
+
+	if (is_global_init(current->parent)) {
+		if (unlikely(!strcmp(filename->name, XIAOMI_LIBPERFMGR_BIN)) ||
+		    unlikely(!strcmp(filename->name, LINEAGE_LIBPERFMGR_BIN)))
+			WRITE_ONCE(libperfmgr_tsk, current);
 	}
 
 	/* execve succeeded */
